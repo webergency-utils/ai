@@ -108,6 +108,11 @@ export class SpanImpl implements Span
             ( child as { parentSpanId?: string } ).parentSpanId = this.id;
         }
 
+        if( 'traceId' in child && child.traceId !== this.traceId )
+        {
+            ( child as { traceId: string } ).traceId = this.traceId;
+        }
+
         this.children.push( child );
     }
 
