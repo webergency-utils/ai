@@ -66,3 +66,21 @@ export class InvalidInputError extends AIError
         this.name = 'InvalidInputError';
     }
 }
+
+export class BudgetExceededError extends AIError
+{
+    public readonly currentSpendUSD : number;
+    public readonly budgetLimitUSD  : number;
+
+    constructor( currentSpendUSD: number, budgetLimitUSD: number )
+    {
+        super( 
+            `Budget cap exceeded: current spend $${currentSpendUSD.toFixed( 4 )} exceeds limit $${budgetLimitUSD.toFixed( 4 )}`, 
+            'BUDGET_EXCEEDED', 
+            { currentSpendUSD, budgetLimitUSD } 
+        );
+        this.name = 'BudgetExceededError';
+        this.currentSpendUSD = currentSpendUSD;
+        this.budgetLimitUSD = budgetLimitUSD;
+    }
+}
