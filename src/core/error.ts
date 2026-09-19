@@ -71,16 +71,23 @@ export class BudgetExceededError extends AIError
 {
     public readonly currentSpendUSD : number;
     public readonly budgetLimitUSD  : number;
+    public readonly category?       : string;
 
-    constructor( currentSpendUSD: number, budgetLimitUSD: number )
+    constructor( currentSpendUSD: number, budgetLimitUSD: number, category?: string )
     {
+        const message = category
+            ? `Category '${category}' budget cap exceeded: current spend $${currentSpendUSD.toFixed( 4 )} exceeds limit $${budgetLimitUSD.toFixed( 4 )}`
+            : `Budget cap exceeded: current spend $${currentSpendUSD.toFixed( 4 )} exceeds limit $${budgetLimitUSD.toFixed( 4 )}`;
+
         super( 
-            `Budget cap exceeded: current spend $${currentSpendUSD.toFixed( 4 )} exceeds limit $${budgetLimitUSD.toFixed( 4 )}`, 
+            message, 
             'BUDGET_EXCEEDED', 
-            { currentSpendUSD, budgetLimitUSD } 
+            { currentSpendUSD, budgetLimitUSD, category } 
         );
         this.name = 'BudgetExceededError';
         this.currentSpendUSD = currentSpendUSD;
         this.budgetLimitUSD = budgetLimitUSD;
+        this.category = category;
     }
 }
+
