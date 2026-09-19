@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { SpendTracker } from '../spend/tracker.js';
-import { SimpleExecutionContext, type ExecutionContext } from '../agent/context.js';
+import { SimpleExecutionContext, type ExecutionContext, type SimpleExecutionContextOptions } from '../agent/context.js';
 import { SpanImpl } from './span.js';
 import { computeTraceRollup } from './rollup.js';
 import type { 
@@ -9,6 +9,7 @@ import type {
     SpanKind, 
     Trace, 
     TraceEvents, 
+    TraceEvent,
     TraceFilterOptions 
 } from './types.js';
 
@@ -58,6 +59,68 @@ export class TraceCollector extends EventEmitter
     public override emit<E extends keyof TraceEvents>( event: E, ...args: Parameters<TraceEvents[E]> ): boolean
     {
         return super.emit( event, ...args );
+    }
+
+    public subscribe( listener: ( event: TraceEvent ) => void ): () => void
+    {
+        const onSpanStart = ( span: Span ): void => 
+        {
+            listener( { type : 'span:start', span } );
+        };
+
+        const onSpanEnd = ( span: Span ): void => 
+        {
+            listener( { type : 'span:end', span } );
+        };
+
+        const onTraceStart = ( trace: Trace ): void => 
+        {
+            listener( { type : 'trace:start', trace } );
+        };
+
+        const onTraceComplete = ( trace: Trace ): void => 
+        {
+            listener( { type : 'trace:complete', trace } );
+        };
+
+        const onTraceEnd = ( trace: Trace ): void => 
+        {
+            listener( { type : 'trace:end', trace } );
+        };
+
+        this.on( 'span:start', onSpanStart );
+        this.on( 'span:end', onSpanEnd );
+        this.on( 'trace:start', onTraceStart );
+        this.on( 'trace:complete', onTraceComplete );
+        this.on( 'trace:end', onTraceEnd );
+
+        return (): void => 
+        {
+            this.off( 'span:start', onSpanStart );
+            this.off( 'span:end', onSpanEnd );
+            this.off( 'trace:start', onTraceStart );
+            this.off( 'trace:complete', onTraceComplete );
+            this.off( 'trace:end', onTraceEnd );
+        };
+    }
+
+    public createExecutionContext( options: SimpleExecutionContextOptions = {} ): ExecutionContext
+    {
+        return new SimpleExecutionContext( 
+            {
+                ...options,
+                onSpanStart : ( span ) => 
+                {
+                    this.recordSpanStart( span );
+                    options.onSpanStart?.( span );
+                },
+                onSpanEnd : ( span ) => 
+                {
+                    this.recordSpanEnd( span );
+                    options.onSpanEnd?.( span );
+                }
+            } 
+        );
     }
 
     public startTrace( options: StartTraceOptions = {} ): {
@@ -110,12 +173,41 @@ export class TraceCollector extends EventEmitter
 
     public recordSpanStart( span: Span ): void
     {
+        if( !span.parentSpanId && !this.#activeTraces.has( span.traceId ) )
+        {
+            const trace: Trace = 
+            {
+                traceId       : span.traceId,
+                startTime     : span.startTime,
+                rootSpan      : span,
+                totalSpendUSD : 0,
+                categorySpend : { ...span.categorySpend }
+            };
+
+            this.#activeTraces.set( trace.traceId, trace );
+            this.emit( 'trace:start', trace );
+        }
+
         this.emit( 'span:start', span );
     }
 
     public recordSpanEnd( span: Span ): void
     {
         this.emit( 'span:end', span );
+
+        if( !span.parentSpanId )
+        {
+            const trace = this.#activeTraces.get( span.traceId );
+
+            if( trace )
+            {
+                trace.endTime = span.endTime;
+                trace.durationMs = span.durationMs;
+                computeTraceRollup( trace );
+                this.#activeTraces.delete( span.traceId );
+                this.recordCompletedTrace( trace );
+            }
+        }
     }
 
     public endTrace( traceId: string ): Trace | undefined
@@ -170,6 +262,7 @@ export class TraceCollector extends EventEmitter
 
         this.#completedTraces.set( trace.traceId, trace );
         this.emit( 'trace:complete', trace );
+        this.emit( 'trace:end', trace );
     }
 
     public getTrace( traceId: string ): Trace | undefined

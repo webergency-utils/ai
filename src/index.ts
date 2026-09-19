@@ -10,3 +10,4 @@ export * from './spend/index.js';
 export * from './mcp/index.js';
 export * from './agent/index.js';
 export * from './workflow/index.js';
+export * from './trace/index.js';

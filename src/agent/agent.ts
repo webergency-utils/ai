@@ -6,6 +6,8 @@ import type { Tool } from './tool.js';
 import type { CheckpointManager } from './checkpoint.js';
 import type { JITToolRetriever } from './jit-retriever.js';
 import { SimpleExecutionContext, type ExecutionContext } from './context.js';
+import type { Span } from '../trace/types.js';
+import type { TraceCollector } from '../trace/collector.js';
 
 export interface AgentConfig
 {
@@ -16,14 +18,16 @@ export interface AgentConfig
     checkpointManager? : CheckpointManager
     spendTracker?      : SpendTracker
     jitRetriever?      : JITToolRetriever
+    collector?         : TraceCollector
 }
 
 export interface AgentRunOptions
 {
-    threadId? : string
-    agentId?  : string
-    signal?   : AbortSignal
-    context?  : ExecutionContext
+    threadId?  : string
+    agentId?   : string
+    signal?    : AbortSignal
+    context?   : ExecutionContext
+    collector? : TraceCollector
 }
 
 export interface AgentResult
@@ -34,6 +38,8 @@ export interface AgentResult
     spendUSD       : number
     categorySpend? : CategorySpendBreakdown
     threadId?      : string
+    traceId?       : string
+    span?          : Span
 }
 
 export class Agent
@@ -45,6 +51,7 @@ export class Agent
     readonly #checkpointManager?: CheckpointManager;
     readonly #spendTracker?     : SpendTracker;
     readonly #jitRetriever?     : JITToolRetriever;
+    readonly #collector?        : TraceCollector;
 
     constructor( config: AgentConfig )
     {
@@ -55,6 +62,7 @@ export class Agent
         this.#checkpointManager = config.checkpointManager;
         this.#spendTracker = config.spendTracker;
         this.#jitRetriever = config.jitRetriever;
+        this.#collector = config.collector;
     }
 
     public async run( 
@@ -64,16 +72,25 @@ export class Agent
     {
         const threadId = options.threadId ?? `thread_${Date.now()}`;
         const agentId = options.agentId ?? 'agent_default';
+        const collector = options.collector ?? this.#collector;
+
+        const context = options.context ?? ( 
+            collector ? 
+                collector.createExecutionContext( {
+                    threadId,
+                    agentId,
+                    tracker : this.#spendTracker
+                } ) : 
+                new SimpleExecutionContext( {
+                    threadId,
+                    agentId,
+                    tracker : this.#spendTracker
+                } )
+        );
+
         let messages: ChatMessage[] = [];
         let totalSpendUSD = 0;
         let stepIndex = 0;
-
-        const context = options.context ?? new SimpleExecutionContext( {
-            threadId,
-            agentId,
-            tracker : this.#spendTracker
-        } );
-
 
         // Hydrate from checkpoint if available
         if( this.#checkpointManager && options.threadId )
@@ -106,112 +123,180 @@ export class Agent
             activeTools = await this.#jitRetriever.retrieveTools( input );
         }
 
-        const toolDefs: ToolDefinition[] = activeTools.map( ( t ) => {return t.toDefinition();} );
+        const toolDefs: ToolDefinition[] = activeTools.map( ( t ) => { return t.toDefinition(); } );
         const toolMap = new Map<string, Tool>( activeTools.map( ( t ) => [ t.name, t ] ) );
 
         let finalText = '';
 
-        while( stepIndex < this.#maxIterations )
-        {
-            if( options.signal?.aborted )
+        return context.withSpan( 
+            'agent:run', 
+            async ( runSpan, runCtx ) => 
             {
-                throw new Error( 'Agent execution aborted' );
-            }
+                runSpan.setAttribute( 'agent.id', agentId );
+                runSpan.setAttribute( 'agent.threadId', threadId );
 
-            const response = await this.#model.generate( 
+                while( stepIndex < this.#maxIterations )
                 {
-                    messages,
-                    systemPrompt : this.#instructions,
-                    tools        : toolDefs.length > 0 ? toolDefs : undefined
-                } );
-
-            if( this.#spendTracker && response.usage )
-            {
-                const spend = this.#spendTracker.record( this.#model.model, response.usage );
-                totalSpendUSD += spend.totalCost;
-            }
-
-            if( response.toolCalls && response.toolCalls.length > 0 )
-            {
-                // Assistant issued tool calls
-                messages.push( 
+                    if( options.signal?.aborted )
                     {
-                        role      : 'assistant',
-                        content   : response.content,
-                        toolCalls : response.toolCalls
-                    } );
-
-                for( const tc of response.toolCalls )
-                {
-                    const tool = toolMap.get( tc.name );
-                    let toolResultStr: string;
-
-                    if( tool )
-                    {
-                        try
-                        {
-                            const res = await tool.run( tc.arguments, context );
-                            toolResultStr = typeof res === 'string' ? res : JSON.stringify( res );
-                        }
-                        catch( err: unknown )
-                        {
-                            toolResultStr = `Error: ${err instanceof Error ? err.message : String( err )}`;
-                        }
-                    }
-                    else
-                    {
-                        toolResultStr = `Error: Tool '${tc.name}' not found`;
+                        throw new Error( 'Agent execution aborted' );
                     }
 
-                    messages.push( 
-                        {
-                            role       : 'tool',
-                            toolCallId : tc.id,
-                            name       : tc.name,
-                            content    : toolResultStr
-                        } );
-                }
+                    const currentStep = stepIndex;
 
-                if( this.#checkpointManager )
-                {
-                    await this.#checkpointManager.saveCheckpoint( 
-                        threadId, 
-                        stepIndex, 
-                        messages, 
-                        {}, 
-                        this.#spendTracker ? this.#spendTracker.totalSpendUSD : totalSpendUSD 
+                    const hasMore = await runCtx.withSpan( 
+                        `agent:step:${currentStep}`, 
+                        async ( stepSpan, stepCtx ) => 
+                        {
+                            stepSpan.setAttribute( 'step.index', currentStep );
+
+                            const response = await stepCtx.withSpan( 
+                                'model:generate', 
+                                async ( modelSpan ) => 
+                                {
+                                    modelSpan.setAttribute( 'model.provider', this.#model.provider );
+                                    modelSpan.setAttribute( 'model.name', this.#model.model );
+
+                                    const resp = await this.#model.generate( {
+                                        messages,
+                                        systemPrompt : this.#instructions,
+                                        tools        : toolDefs.length > 0 ? toolDefs : undefined
+                                    } );
+
+                                    if( resp.usage )
+                                    {
+                                        modelSpan.addMetrics( {
+                                            promptTokens     : resp.usage.promptTokens,
+                                            completionTokens : resp.usage.completionTokens,
+                                            totalTokens      : resp.usage.totalTokens
+                                        } );
+
+                                        if( this.#spendTracker )
+                                        {
+                                            const spend = this.#spendTracker.record( this.#model.model, resp.usage );
+                                            totalSpendUSD += spend.totalCost;
+                                            modelSpan.recordSpend( {
+                                                category    : 'model',
+                                                subcategory : this.#model.model,
+                                                costUSD     : spend.totalCost,
+                                                units       : resp.usage.totalTokens,
+                                                unitType    : 'tokens'
+                                            } );
+                                        }
+                                    }
+
+                                    return resp;
+                                }, 
+                                { kind : 'model' } 
+                            );
+
+                            if( response.toolCalls && response.toolCalls.length > 0 )
+                            {
+                                messages.push( {
+                                    role      : 'assistant',
+                                    content   : response.content,
+                                    toolCalls : response.toolCalls
+                                } );
+
+                                for( const tc of response.toolCalls )
+                                {
+                                    const tool = toolMap.get( tc.name );
+                                    let toolResultStr: string;
+
+                                    if( tool )
+                                    {
+                                        try
+                                        {
+                                            const res = await stepCtx.withSpan( 
+                                                `tool:run:${tc.name}`, 
+                                                async ( toolSpan, toolCtx ) => 
+                                                {
+                                                    toolSpan.setAttribute( 'tool.name', tc.name );
+                                                    return await tool.run( tc.arguments, toolCtx );
+                                                }, 
+                                                {
+                                                    kind       : 'tool',
+                                                    attributes : { 'tool.name' : tc.name }
+                                                } 
+                                            );
+                                            toolResultStr = typeof res === 'string' ? res : JSON.stringify( res );
+                                        }
+                                        catch( err: unknown )
+                                        {
+                                            toolResultStr = `Error: ${err instanceof Error ? err.message : String( err )}`;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        toolResultStr = `Error: Tool '${tc.name}' not found`;
+                                    }
+
+                                    messages.push( {
+                                        role       : 'tool',
+                                        toolCallId : tc.id,
+                                        name       : tc.name,
+                                        content    : toolResultStr
+                                    } );
+                                }
+
+                                if( this.#checkpointManager )
+                                {
+                                    await this.#checkpointManager.saveCheckpoint( 
+                                        threadId, 
+                                        currentStep, 
+                                        messages, 
+                                        {}, 
+                                        this.#spendTracker ? this.#spendTracker.totalSpendUSD : totalSpendUSD 
+                                    );
+                                }
+
+                                stepIndex++;
+                                return true;
+                            }
+
+                            finalText = response.content;
+                            messages.push( { role : 'assistant', content : finalText } );
+
+                            if( this.#checkpointManager )
+                            {
+                                await this.#checkpointManager.saveCheckpoint( 
+                                    threadId, 
+                                    currentStep, 
+                                    messages, 
+                                    {}, 
+                                    this.#spendTracker ? this.#spendTracker.totalSpendUSD : totalSpendUSD 
+                                );
+                            }
+
+                            return false;
+                        }, 
+                        { kind : 'agent' } 
                     );
+
+                    if( !hasMore )
+                    {
+                        break;
+                    }
                 }
 
-                stepIndex++;
-                continue;
-            }
-
-            // Model finished with regular answer
-            finalText = response.content;
-            messages.push( { role : 'assistant', content : finalText } );
-
-            if( this.#checkpointManager )
+                return {
+                    text          : finalText,
+                    messages,
+                    steps         : stepIndex + 1,
+                    spendUSD      : this.#spendTracker ? this.#spendTracker.totalSpendUSD : totalSpendUSD,
+                    categorySpend : this.#spendTracker?.categorySpend,
+                    threadId,
+                    traceId       : runSpan.traceId,
+                    span          : runSpan
+                };
+            }, 
             {
-                await this.#checkpointManager.saveCheckpoint( 
-                    threadId, 
-                    stepIndex, 
-                    messages, 
-                    {}, 
-                    this.#spendTracker ? this.#spendTracker.totalSpendUSD : totalSpendUSD 
-                );
-            }
-
-            break;
-        }
-
-        return {
-            text          : finalText,
-            messages,
-            steps         : stepIndex + 1,
-            spendUSD      : this.#spendTracker ? this.#spendTracker.totalSpendUSD : totalSpendUSD,
-            categorySpend : this.#spendTracker?.categorySpend,
-            threadId
-        };
+                kind       : 'agent',
+                attributes : {
+                    'agent.id'       : agentId,
+                    'agent.threadId' : threadId
+                }
+            } 
+        );
     }
 }

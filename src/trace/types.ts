@@ -135,9 +135,25 @@ export interface TraceFilterOptions
     limit?      : number
 }
 
+export type TraceEventType = 
+    | 'span:start'
+    | 'span:end'
+    | 'trace:start'
+    | 'trace:end'
+    | 'trace:complete';
+
+export type TraceEvent = 
+    | { type : 'span:start'; span : Span }
+    | { type : 'span:end'; span : Span }
+    | { type : 'trace:start'; trace : Trace }
+    | { type : 'trace:end'; trace : Trace }
+    | { type : 'trace:complete'; trace : Trace };
+
 export interface TraceEvents
 {
     'span:start'    : ( span: Span ) => void
     'span:end'      : ( span: Span ) => void
+    'trace:start'   : ( trace: Trace ) => void
+    'trace:end'     : ( trace: Trace ) => void
     'trace:complete': ( trace: Trace ) => void
 }

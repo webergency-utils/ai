@@ -38,98 +38,173 @@ export class MemoryDocStore implements IDocumentStore
 
     public async get<T = Record<string, unknown>>( collection: string, id: string, options?: DocStoreOperationOptions ): Promise<T | null>
     {
-        this.#reportSpend( {
-            category    : 'storage',
-            subcategory : 'doc_read',
-            units       : 1,
-            unitType    : 'operations'
-        }, options?.context );
-
-        const col = this.#collections.get( collection );
-
-        if( !col )
+        const execute = async ( ctx?: ExecutionContext ): Promise<T | null> => 
         {
-            return null;
+            this.#reportSpend( {
+                category    : 'storage',
+                subcategory : 'doc_read',
+                units       : 1,
+                unitType    : 'operations'
+            }, ctx ?? options?.context );
+
+            const col = this.#collections.get( collection );
+
+            if( !col )
+            {
+                return null;
+            }
+
+            const doc = col.get( id );
+
+            if( doc === undefined )
+            {
+                return null;
+            }
+
+            return structuredClone( doc ) as T;
+        };
+
+        if( options?.context?.withSpan )
+        {
+            return options.context.withSpan( 
+                'storage:doc:get', 
+                async ( span, childCtx ) => 
+                {
+                    span.setAttribute( 'storage.collection', collection );
+                    span.setAttribute( 'storage.id', id );
+                    return execute( childCtx );
+                }, 
+                { kind : 'storage' } 
+            );
         }
 
-        const doc = col.get( id );
-
-        if( doc === undefined )
-        {
-            return null;
-        }
-
-        return structuredClone( doc ) as T;
+        return execute();
     }
 
     public async set<T = Record<string, unknown>>( collection: string, id: string, doc: T, options?: DocStoreOperationOptions ): Promise<void>
     {
-        let col = this.#collections.get( collection );
-
-        if( !col )
+        const execute = async ( ctx?: ExecutionContext ): Promise<void> => 
         {
-            col = new Map<string, unknown>();
-            this.#collections.set( collection, col );
+            let col = this.#collections.get( collection );
+
+            if( !col )
+            {
+                col = new Map<string, unknown>();
+                this.#collections.set( collection, col );
+            }
+
+            col.set( id, structuredClone( doc ) );
+
+            this.#reportSpend( {
+                category    : 'storage',
+                subcategory : 'doc_write',
+                units       : 1,
+                unitType    : 'operations'
+            }, ctx ?? options?.context );
+        };
+
+        if( options?.context?.withSpan )
+        {
+            return options.context.withSpan( 
+                'storage:doc:set', 
+                async ( span, childCtx ) => 
+                {
+                    span.setAttribute( 'storage.collection', collection );
+                    span.setAttribute( 'storage.id', id );
+                    return execute( childCtx );
+                }, 
+                { kind : 'storage' } 
+            );
         }
 
-        col.set( id, structuredClone( doc ) );
-
-        this.#reportSpend( {
-            category    : 'storage',
-            subcategory : 'doc_write',
-            units       : 1,
-            unitType    : 'operations'
-        }, options?.context );
+        return execute();
     }
 
     public async delete( collection: string, id: string, options?: DocStoreOperationOptions ): Promise<boolean>
     {
-        this.#reportSpend( {
-            category    : 'storage',
-            subcategory : 'doc_write',
-            units       : 1,
-            unitType    : 'operations'
-        }, options?.context );
-
-        const col = this.#collections.get( collection );
-
-        if( !col )
+        const execute = async ( ctx?: ExecutionContext ): Promise<boolean> => 
         {
-            return false;
+            this.#reportSpend( {
+                category    : 'storage',
+                subcategory : 'doc_write',
+                units       : 1,
+                unitType    : 'operations'
+            }, ctx ?? options?.context );
+
+            const col = this.#collections.get( collection );
+
+            if( !col )
+            {
+                return false;
+            }
+
+            return col.delete( id );
+        };
+
+        if( options?.context?.withSpan )
+        {
+            return options.context.withSpan( 
+                'storage:doc:delete', 
+                async ( span, childCtx ) => 
+                {
+                    span.setAttribute( 'storage.collection', collection );
+                    span.setAttribute( 'storage.id', id );
+                    return execute( childCtx );
+                }, 
+                { kind : 'storage' } 
+            );
         }
 
-        return col.delete( id );
+        return execute();
     }
 
     public async list<T = Record<string, unknown>>( collection: string, filter?: Record<string, unknown>, options?: DocStoreOperationOptions ): Promise<T[]>
     {
-        this.#reportSpend( {
-            category    : 'storage',
-            subcategory : 'doc_read',
-            units       : 1,
-            unitType    : 'operations'
-        }, options?.context );
-
-        const col = this.#collections.get( collection );
-
-        if( !col )
+        const execute = async ( ctx?: ExecutionContext ): Promise<T[]> => 
         {
-            return [];
-        }
+            this.#reportSpend( {
+                category    : 'storage',
+                subcategory : 'doc_read',
+                units       : 1,
+                unitType    : 'operations'
+            }, ctx ?? options?.context );
 
-        const results: T[] = [];
+            const col = this.#collections.get( collection );
 
-        for( const val of col.values() )
-        {
-            const cloned = structuredClone( val ) as Record<string, unknown>;
-
-            if( this.matchesFilter( cloned, filter ) )
+            if( !col )
             {
-                results.push( cloned as T );
+                return [];
             }
+
+            const results: T[] = [];
+
+            for( const val of col.values() )
+            {
+                const cloned = structuredClone( val ) as Record<string, unknown>;
+
+                if( this.matchesFilter( cloned, filter ) )
+                {
+                    results.push( cloned as T );
+                }
+            }
+
+            return results;
+        };
+
+        if( options?.context?.withSpan )
+        {
+            return options.context.withSpan( 
+                'storage:doc:list', 
+                async ( span, childCtx ) => 
+                {
+                    span.setAttribute( 'storage.collection', collection );
+                    return execute( childCtx );
+                }, 
+                { kind : 'storage' } 
+            );
         }
 
-        return results;
+        return execute();
     }
 
     public async count( collection: string ): Promise<number>
