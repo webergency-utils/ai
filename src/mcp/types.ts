@@ -1,3 +1,5 @@
+import type { SerializedSpan } from '../trace/types.js';
+
 export interface JSONRPCRequest
 {
     jsonrpc : '2.0'
@@ -45,11 +47,23 @@ export interface MCPContentItem
     mimeType? : string
 }
 
+export interface MCPTraceMeta
+{
+    traceId?      : string
+    parentSpanId? : string
+    metadata?     : Record<string, unknown>
+}
+
 export interface MCPToolResult
 {
     content  : MCPContentItem[]
     isError? : boolean
+    _meta?   : {
+        spans? : SerializedSpan[]
+        [key: string]: unknown
+    }
 }
+
 
 export interface MCPTransport
 {

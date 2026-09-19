@@ -7,9 +7,11 @@ import type {
     MCPTool, 
     MCPTransport 
 } from './types.js';
-import type { ExecutionContext } from '../agent/context.js';
+import { SimpleExecutionContext, type ExecutionContext } from '../agent/context.js';
+import { SpanImpl } from '../trace/span.js';
 
 export type ToolHandler = ( args: Record<string, unknown>, context?: ExecutionContext ) => Promise<unknown>;
+
 
 
 export interface MCPServerOptions
@@ -119,10 +121,36 @@ export class MCPServer
                     };
                 }
 
+                const meta = req.params?._meta as { traceId?: string, parentSpanId?: string } | undefined;
+                let handlerContext = context;
+                let serverToolSpan: SpanImpl | undefined;
+
+                if( meta?.traceId )
+                {
+                    serverToolSpan = new SpanImpl( `tool:${toolName}`, 
+                        {
+                            traceId      : meta.traceId,
+                            parentSpanId : meta.parentSpanId,
+                            kind         : 'tool'
+                        } );
+
+                    handlerContext = new SimpleExecutionContext( 
+                        {
+                            traceId    : meta.traceId,
+                            activeSpan : serverToolSpan,
+                            threadId   : context?.threadId,
+                            agentId    : context?.agentId
+                        } );
+                }
+
                 try
                 {
-                    const rawResult = await registered.handler( toolArgs, context );
+                    const rawResult = await registered.handler( toolArgs, handlerContext );
 
+                    if( serverToolSpan )
+                    {
+                        serverToolSpan.end();
+                    }
 
                     let formattedContent: Array<{ type: string, text: string }>;
 
@@ -144,28 +172,60 @@ export class MCPServer
                         formattedContent = [ { type : 'text', text } ];
                     }
 
-                    return {
-                        jsonrpc : '2.0',
-                        id      : req.id,
-                        result : 
+                    const responseResult: Record<string, unknown> = 
                         {
                             content : formattedContent,
                             isError : false
-                        }
+                        };
+
+                    if( serverToolSpan )
+                    {
+                        responseResult._meta = 
+                            {
+                                spans : [ serverToolSpan.toJSON() ]
+                            };
+                    }
+
+                    return {
+                        jsonrpc : '2.0',
+                        id      : req.id,
+                        result  : responseResult
                     };
                 }
                 catch( err: unknown )
                 {
                     const errorMessage = err instanceof Error ? err.message : String( err );
 
-                    return {
-                        jsonrpc : '2.0',
-                        id      : req.id,
-                        result : 
+                    if( serverToolSpan )
+                    {
+                        serverToolSpan.status = 'error';
+                        serverToolSpan.errorDetails = 
+                            {
+                                message : errorMessage,
+                                name    : err instanceof Error ? err.name : undefined,
+                                stack   : err instanceof Error ? err.stack : undefined
+                            };
+                        serverToolSpan.end();
+                    }
+
+                    const responseResult: Record<string, unknown> = 
                         {
                             content : [ { type : 'text', text : `Tool error: ${errorMessage}` } ],
                             isError : true
-                        }
+                        };
+
+                    if( serverToolSpan )
+                    {
+                        responseResult._meta = 
+                            {
+                                spans : [ serverToolSpan.toJSON() ]
+                            };
+                    }
+
+                    return {
+                        jsonrpc : '2.0',
+                        id      : req.id,
+                        result  : responseResult
                     };
                 }
             }

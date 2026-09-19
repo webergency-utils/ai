@@ -13,6 +13,9 @@ import type {
 import type { ExecutionContext } from '../agent/context.js';
 import type { SpendTracker } from '../spend/tracker.js';
 import type { CategorySpendInput } from '../spend/types.js';
+import type { Span } from '../trace/types.js';
+import { SpanImpl } from '../trace/span.js';
+
 
 
 export class InMemoryTransport implements MCPTransport
@@ -347,38 +350,114 @@ export class MCPClient
         options?: MCPCallOptions 
     ): Promise<MCPToolResult>
     {
-        const reqPayload = 
+        const context = options?.context;
+        const parentSpan = context?.activeSpan;
+        let mcpSpan: Span | undefined;
+
+        if( context?.startSpan )
+        {
+            mcpSpan = context.startSpan( `mcp:call:${name}`, 
+                {
+                    kind       : 'mcp',
+                    attributes : { 'mcp.tool' : name }
+                } );
+        }
+
+        const reqPayload: Record<string, unknown> = 
             {
                 name,
                 arguments : args
             };
 
-        const res = await this.request( 'tools/call', reqPayload );
+        if( mcpSpan )
+        {
+            reqPayload._meta = 
+                {
+                    traceId      : mcpSpan.traceId,
+                    parentSpanId : mcpSpan.id
+                };
+        }
+        else if( parentSpan )
+        {
+            reqPayload._meta = 
+                {
+                    traceId      : parentSpan.traceId,
+                    parentSpanId : parentSpan.id
+                };
+        }
+
+        let res: JSONRPCResponse;
+
+        try
+        {
+            res = await this.request( 'tools/call', reqPayload );
+        }
+        catch( err: unknown )
+        {
+            if( mcpSpan )
+            {
+                mcpSpan.status = 'error';
+                mcpSpan.errorDetails = 
+                    {
+                        message : err instanceof Error ? err.message : String( err )
+                    };
+                mcpSpan.end();
+            }
+
+            throw err;
+        }
 
         if( res.error )
         {
+            if( mcpSpan )
+            {
+                mcpSpan.status = 'error';
+                mcpSpan.errorDetails = 
+                    {
+                        message : res.error.message
+                    };
+                mcpSpan.end();
+            }
+
             throw new AIError( `MCP tools/call failed: ${res.error.message}`, 'MCP_CLIENT_ERROR', res.error );
         }
 
-        const context = options?.context;
+        const result = res.result as MCPToolResult;
+
+        if( mcpSpan && result?._meta?.spans && Array.isArray( result._meta.spans ) )
+        {
+            for( const serializedChild of result._meta.spans )
+            {
+                const deserializedChild = SpanImpl.fromSerialized( serializedChild );
+                mcpSpan.addChild( deserializedChild );
+            }
+        }
+
         const reqBytes = Buffer.byteLength( JSON.stringify( reqPayload ) );
         const resBytes = Buffer.byteLength( JSON.stringify( res ) );
+
+        const reportCtx = mcpSpan ? context?.child( { activeSpan : mcpSpan } ) : context;
 
         this.#reportSpend( {
             category    : 'network',
             subcategory : 'mcp_transport',
             units       : reqBytes + resBytes,
             unitType    : 'bytes'
-        }, context );
+        }, reportCtx );
 
         this.#reportSpend( {
             category    : 'mcp',
             subcategory : name,
             units       : 1,
             unitType    : 'call'
-        }, context );
+        }, reportCtx );
 
-        return res.result as MCPToolResult;
+        if( mcpSpan )
+        {
+            mcpSpan.end();
+        }
+
+        return result;
     }
 
     #reportSpend( entry: CategorySpendInput, context?: ExecutionContext ): void
