@@ -1,9 +1,11 @@
 import type { ModelProtocol } from '../core/protocol.js';
 import type { ChatMessage, ToolDefinition } from '../core/types.js';
 import type { SpendTracker } from '../spend/tracker.js';
+import type { CategorySpendBreakdown } from '../spend/types.js';
 import type { Tool } from './tool.js';
 import type { CheckpointManager } from './checkpoint.js';
 import type { JITToolRetriever } from './jit-retriever.js';
+import { SimpleExecutionContext, type ExecutionContext } from './context.js';
 
 export interface AgentConfig
 {
@@ -19,27 +21,30 @@ export interface AgentConfig
 export interface AgentRunOptions
 {
     threadId? : string
+    agentId?  : string
     signal?   : AbortSignal
+    context?  : ExecutionContext
 }
 
 export interface AgentResult
 {
-    text      : string
-    messages  : ChatMessage[]
-    steps     : number
-    spendUSD  : number
-    threadId? : string
+    text           : string
+    messages       : ChatMessage[]
+    steps          : number
+    spendUSD       : number
+    categorySpend? : CategorySpendBreakdown
+    threadId?      : string
 }
 
 export class Agent
 {
-    readonly #model: ModelProtocol;
-    readonly #instructions?: string;
-    readonly #tools: Tool[];
-    readonly #maxIterations: number;
+    readonly #model             : ModelProtocol;
+    readonly #instructions?     : string;
+    readonly #tools             : Tool[];
+    readonly #maxIterations     : number;
     readonly #checkpointManager?: CheckpointManager;
-    readonly #spendTracker?: SpendTracker;
-    readonly #jitRetriever?: JITToolRetriever;
+    readonly #spendTracker?     : SpendTracker;
+    readonly #jitRetriever?     : JITToolRetriever;
 
     constructor( config: AgentConfig )
     {
@@ -58,9 +63,17 @@ export class Agent
     ): Promise<AgentResult>
     {
         const threadId = options.threadId ?? `thread_${Date.now()}`;
+        const agentId = options.agentId ?? 'agent_default';
         let messages: ChatMessage[] = [];
         let totalSpendUSD = 0;
         let stepIndex = 0;
+
+        const context = options.context ?? new SimpleExecutionContext( {
+            threadId,
+            agentId,
+            tracker : this.#spendTracker
+        } );
+
 
         // Hydrate from checkpoint if available
         if( this.#checkpointManager && options.threadId )
@@ -137,7 +150,7 @@ export class Agent
                     {
                         try
                         {
-                            const res = await tool.run( tc.arguments );
+                            const res = await tool.run( tc.arguments, context );
                             toolResultStr = typeof res === 'string' ? res : JSON.stringify( res );
                         }
                         catch( err: unknown )
@@ -166,7 +179,7 @@ export class Agent
                         stepIndex, 
                         messages, 
                         {}, 
-                        totalSpendUSD 
+                        this.#spendTracker ? this.#spendTracker.totalSpendUSD : totalSpendUSD 
                     );
                 }
 
@@ -185,7 +198,7 @@ export class Agent
                     stepIndex, 
                     messages, 
                     {}, 
-                    totalSpendUSD 
+                    this.#spendTracker ? this.#spendTracker.totalSpendUSD : totalSpendUSD 
                 );
             }
 
@@ -193,10 +206,11 @@ export class Agent
         }
 
         return {
-            text     : finalText,
+            text          : finalText,
             messages,
-            steps    : stepIndex + 1,
-            spendUSD : totalSpendUSD,
+            steps         : stepIndex + 1,
+            spendUSD      : this.#spendTracker ? this.#spendTracker.totalSpendUSD : totalSpendUSD,
+            categorySpend : this.#spendTracker?.categorySpend,
             threadId
         };
     }

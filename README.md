@@ -255,8 +255,69 @@ const syncService = new PricingSyncService( {
 syncService.startAutoSync();
 ```
 
+#### Multi-Category Telemetry & Budget Enforcement
+
+Track operational spend across all dimensions—model inference, storage operations, compute runtime, network transport, MCP calls, and paid tools—with unified budgets, soft warning thresholds, and dynamic unit rate resolution:
+
+```typescript
+import { 
+    SpendTracker, 
+    UnitCostRegistry, 
+    createTool, 
+    MemoryVectorStore, 
+    Agent 
+} from '@webergency-utils/ai';
+import { z } from 'zod';
+
+// 1. Configure SpendTracker with aggregate cap and category ceilings
+const tracker = new SpendTracker( {
+    maxBudgetUSD     : 10.00,
+    categoryBudgets  : {
+        tools   : 1.00,
+        storage : 0.50
+    },
+    warningThreshold : 0.8 // Soft warning at 80% of any budget limit
+} );
+
+// 2. Subscribe to early warning alerts before hard breaches occur
+tracker.on( 'warning', ( event ) => {
+    console.warn( `[Budget Alert] ${event.category} spend reached ${event.percentage.toFixed( 1 )}% ($${event.currentSpend.toFixed( 4 )}/$${event.budgetLimit.toFixed( 4 )})` );
+} );
+
+// 3. Define custom unit pricing or use built-in defaults
+const unitPricing = new UnitCostRegistry();
+unitPricing.register( 'storage:vector_query', 0.0001 ); // $0.0001 per query
+
+// 4. Dual-level storage metering: auto-report or per-call context override
+const vectorStore = new MemoryVectorStore( {
+    tracker,
+    storagePricing : unitPricing
+} );
+
+// 5. Tools report spend ambiently without altering business return signatures
+const paidSearchTool = createTool( {
+    name        : 'web_search',
+    description : 'Execute paid web search API',
+    parameters  : z.object( { query : z.string() } ),
+    execute     : async ( args, context ) => {
+        // Direct USD cost reporting
+        context?.reportSpend( {
+            category    : 'tools',
+            subcategory : 'web_search',
+            costUSD     : 0.005
+        } );
+        return `Top results for: ${args.query}`;
+    }
+} );
+
+// 6. Inspect unified telemetry breakdown
+console.log( tracker.totalSpendUSD );
+console.log( tracker.categorySpend );
+// { model: 0.012, storage: 0.001, compute: 0, network: 0.0002, mcp: 0, tools: 0.005, custom: 0 }
+```
 
 ### Model Context Protocol (MCP)
+
 
 #### MCP Server
 
