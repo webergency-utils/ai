@@ -10,6 +10,10 @@ import type {
     MCPToolResult, 
     MCPTransport 
 } from './types.js';
+import type { ExecutionContext } from '../agent/context.js';
+import type { SpendTracker } from '../spend/tracker.js';
+import type { CategorySpendInput } from '../spend/types.js';
+
 
 export class InMemoryTransport implements MCPTransport
 {
@@ -273,18 +277,30 @@ export class SSETransport implements MCPTransport
     }
 }
 
+export interface MCPClientOptions
+{
+    tracker? : SpendTracker
+}
+
+export interface MCPCallOptions
+{
+    context? : ExecutionContext
+}
+
 export class MCPClient
 {
-    readonly #transport: MCPTransport;
+    readonly #transport       : MCPTransport;
+    readonly #tracker?        : SpendTracker;
     readonly #pendingRequests = new Map<string | number, {
         resolve: ( res: JSONRPCResponse ) => void
         reject: ( err: Error ) => void
     }>();
     #requestIdCounter = 1;
 
-    constructor( transport: MCPTransport )
+    constructor( transport: MCPTransport, options: MCPClientOptions = {} )
     {
         this.#transport = transport;
+        this.#tracker = options.tracker;
         this.#transport.onMessage( ( msg ) => 
         {
             this.handleIncoming( msg );
@@ -325,21 +341,58 @@ export class MCPClient
         return result?.tools ?? [];
     }
 
-    public async callTool( name: string, args: Record<string, unknown> = {} ): Promise<MCPToolResult>
+    public async callTool( 
+        name: string, 
+        args: Record<string, unknown> = {}, 
+        options?: MCPCallOptions 
+    ): Promise<MCPToolResult>
     {
-        const res = await this.request( 'tools/call', 
+        const reqPayload = 
             {
                 name,
                 arguments : args
-            } );
+            };
+
+        const res = await this.request( 'tools/call', reqPayload );
 
         if( res.error )
         {
             throw new AIError( `MCP tools/call failed: ${res.error.message}`, 'MCP_CLIENT_ERROR', res.error );
         }
 
+        const context = options?.context;
+        const reqBytes = Buffer.byteLength( JSON.stringify( reqPayload ) );
+        const resBytes = Buffer.byteLength( JSON.stringify( res ) );
+
+        this.#reportSpend( {
+            category    : 'network',
+            subcategory : 'mcp_transport',
+            units       : reqBytes + resBytes,
+            unitType    : 'bytes'
+        }, context );
+
+        this.#reportSpend( {
+            category    : 'mcp',
+            subcategory : name,
+            units       : 1,
+            unitType    : 'call'
+        }, context );
+
         return res.result as MCPToolResult;
     }
+
+    #reportSpend( entry: CategorySpendInput, context?: ExecutionContext ): void
+    {
+        if( context )
+        {
+            context.reportSpend( entry );
+        }
+        else if( this.#tracker )
+        {
+            this.#tracker.recordCategorySpend( entry );
+        }
+    }
+
 
     public async toToolDefinitions(): Promise<ToolDefinition[]>
     {

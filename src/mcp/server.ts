@@ -7,8 +7,10 @@ import type {
     MCPTool, 
     MCPTransport 
 } from './types.js';
+import type { ExecutionContext } from '../agent/context.js';
 
-export type ToolHandler = ( args: Record<string, unknown> ) => Promise<unknown>;
+export type ToolHandler = ( args: Record<string, unknown>, context?: ExecutionContext ) => Promise<unknown>;
+
 
 export interface MCPServerOptions
 {
@@ -48,7 +50,7 @@ export class MCPServer
         await transport.connect();
     }
 
-    public async handleMessage( message: JSONRPCMessage ): Promise<JSONRPCResponse | null>
+    public async handleMessage( message: JSONRPCMessage, context?: ExecutionContext ): Promise<JSONRPCResponse | null>
     {
         if( !( 'method' in message ) )
         {
@@ -119,7 +121,8 @@ export class MCPServer
 
                 try
                 {
-                    const rawResult = await registered.handler( toolArgs );
+                    const rawResult = await registered.handler( toolArgs, context );
+
 
                     let formattedContent: Array<{ type: string, text: string }>;
 
