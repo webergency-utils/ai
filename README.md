@@ -213,6 +213,49 @@ const spend = tracker.record( 'claude-3-7-sonnet-20250219', {
 console.log( spend.totalCost ); // Calculated with exact prompt-caching discounts
 ```
 
+#### Dynamic Pricing Sync & Local Registry
+
+Keep model pricing continuously up-to-date with event-driven notifications and automatic periodic synchronization:
+
+```typescript
+import { 
+    LocalPricingRegistry, 
+    PricingSyncService, 
+    OpenRouterPricingSource, 
+    defaultPricingRegistry 
+} from '@webergency-utils/ai';
+
+// 1. Subscribe to pricing change events
+defaultPricingRegistry.on( 'change', ( event ) => {
+    console.log( `Price updated for ${ event.model }:`, event.current );
+});
+
+// 2. Local registry with custom user updater and periodic refresh
+const localRegistry = new LocalPricingRegistry( {
+    refreshIntervalMs : 60_000,
+    updater           : async () => {
+        return {
+            'custom-internal-model' : { inputPerMillion : 0.50, outputPerMillion : 1.00 }
+        };
+    },
+    autoStart : true
+});
+
+// Update manually at any time
+localRegistry.update( 'custom-internal-model', { inputPerMillion : 0.40, outputPerMillion : 0.80 } );
+
+// 3. Automated background sync from public catalog (OpenRouter or LiteLLM)
+const syncService = new PricingSyncService( {
+    registry   : defaultPricingRegistry,
+    source     : new OpenRouterPricingSource(),
+    intervalMs : 24 * 60 * 60 * 1000 // Every 24 hours
+} );
+
+// Non-blocking timer that unrefs automatically
+syncService.startAutoSync();
+```
+
+
 ### Model Context Protocol (MCP)
 
 #### MCP Server
