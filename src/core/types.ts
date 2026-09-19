@@ -42,7 +42,7 @@ export type ToolDefinition =
     {
         name        : string
         description : string
-        parameters  : z.ZodTypeAny
+        parameters  : z.ZodTypeAny | Record<string, unknown>
     }
 
 export type UsageMetrics =
