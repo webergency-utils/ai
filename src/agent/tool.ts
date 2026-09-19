@@ -1,9 +1,10 @@
 import type { z } from 'zod';
 import type { ToolDefinition } from '../core/types.js';
 import { InvalidInputError } from '../core/error.js';
+import type { ExecutionContext } from './context.js';
 
 export type ToolExecutor<TArgs = Record<string, unknown>, TResult = unknown> = 
-    ( args: TArgs ) => Promise<TResult>;
+    ( args: TArgs, context?: ExecutionContext ) => Promise<TResult>;
 
 export interface ToolConfig<TArgs = Record<string, unknown>, TResult = unknown>
 {
@@ -28,7 +29,7 @@ export class Tool<TArgs = Record<string, unknown>, TResult = unknown>
         this.#executor = config.execute;
     }
 
-    public async run( rawArgs: unknown ): Promise<TResult>
+    public async run( rawArgs: unknown, context?: ExecutionContext ): Promise<TResult>
     {
         let validArgs: TArgs;
 
@@ -51,7 +52,7 @@ export class Tool<TArgs = Record<string, unknown>, TResult = unknown>
             validArgs = ( rawArgs ?? {} ) as TArgs;
         }
 
-        return this.#executor( validArgs );
+        return this.#executor( validArgs, context );
     }
 
     public toDefinition(): ToolDefinition
