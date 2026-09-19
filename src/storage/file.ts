@@ -3,6 +3,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
+import type { ExecutionContext } from '../agent/context.js';
+import type { SpendTracker } from '../spend/tracker.js';
+import type { UnitCostRegistry } from '../spend/unit-registry.js';
+import type { CategorySpendInput } from '../spend/types.js';
 
 export interface FileMetadata
 {
@@ -13,23 +17,43 @@ export interface FileMetadata
     contentType? : string
 }
 
+export interface FileStoreOptions
+{
+    tracker?        : SpendTracker
+    storagePricing? : UnitCostRegistry
+}
+
+export interface FileStoreOperationOptions
+{
+    context? : ExecutionContext
+}
+
 export interface IFileStore
 {
-    write( filePath: string, content: Uint8Array | string | ReadableStream<Uint8Array> ): Promise<FileMetadata>
-    read( filePath: string ): Promise<Uint8Array | null>
-    readStream( filePath: string ): Promise<ReadableStream<Uint8Array> | null>
-    delete( filePath: string ): Promise<boolean>
+    write( filePath: string, content: Uint8Array | string | ReadableStream<Uint8Array>, options?: FileStoreOperationOptions ): Promise<FileMetadata>
+    read( filePath: string, options?: FileStoreOperationOptions ): Promise<Uint8Array | null>
+    readStream( filePath: string, options?: FileStoreOperationOptions ): Promise<ReadableStream<Uint8Array> | null>
+    delete( filePath: string, options?: FileStoreOperationOptions ): Promise<boolean>
     exists( filePath: string ): Promise<boolean>
     getMetadata( filePath: string ): Promise<FileMetadata | null>
 }
 
 export class MemoryFileStore implements IFileStore
 {
-    readonly #files = new Map<string, { data: Uint8Array, metadata: FileMetadata }>();
+    readonly #files           = new Map<string, { data: Uint8Array, metadata: FileMetadata }>();
+    readonly #tracker?        : SpendTracker;
+    readonly #storagePricing? : UnitCostRegistry;
+
+    constructor( options: FileStoreOptions = {} )
+    {
+        this.#tracker = options.tracker;
+        this.#storagePricing = options.storagePricing;
+    }
 
     public async write( 
         filePath: string, 
-        content: Uint8Array | string | ReadableStream<Uint8Array> 
+        content: Uint8Array | string | ReadableStream<Uint8Array>, 
+        options?: FileStoreOperationOptions 
     ): Promise<FileMetadata>
     {
         let data: Uint8Array;
@@ -61,10 +85,17 @@ export class MemoryFileStore implements IFileStore
 
         this.#files.set( filePath, { data, metadata } );
 
+        this.#reportSpend( {
+            category    : 'storage',
+            subcategory : 'file_write',
+            units       : data.byteLength,
+            unitType    : 'bytes'
+        }, options?.context );
+
         return metadata;
     }
 
-    public async read( filePath: string ): Promise<Uint8Array | null>
+    public async read( filePath: string, options?: FileStoreOperationOptions ): Promise<Uint8Array | null>
     {
         const file = this.#files.get( filePath );
 
@@ -73,10 +104,17 @@ export class MemoryFileStore implements IFileStore
             return null;
         }
 
+        this.#reportSpend( {
+            category    : 'storage',
+            subcategory : 'file_read',
+            units       : file.data.byteLength,
+            unitType    : 'bytes'
+        }, options?.context );
+
         return new Uint8Array( file.data );
     }
 
-    public async readStream( filePath: string ): Promise<ReadableStream<Uint8Array> | null>
+    public async readStream( filePath: string, options?: FileStoreOperationOptions ): Promise<ReadableStream<Uint8Array> | null>
     {
         const file = this.#files.get( filePath );
 
@@ -86,6 +124,13 @@ export class MemoryFileStore implements IFileStore
         }
 
         const data = file.data;
+
+        this.#reportSpend( {
+            category    : 'storage',
+            subcategory : 'file_read',
+            units       : data.byteLength,
+            unitType    : 'bytes'
+        }, options?.context );
 
         return new ReadableStream<Uint8Array>( 
             {
@@ -97,9 +142,21 @@ export class MemoryFileStore implements IFileStore
             } );
     }
 
-    public async delete( filePath: string ): Promise<boolean>
+    public async delete( filePath: string, options?: FileStoreOperationOptions ): Promise<boolean>
     {
-        return this.#files.delete( filePath );
+        const deleted = this.#files.delete( filePath );
+
+        if( deleted )
+        {
+            this.#reportSpend( {
+                category    : 'storage',
+                subcategory : 'file_delete',
+                units       : 1,
+                unitType    : 'operations'
+            }, options?.context );
+        }
+
+        return deleted;
     }
 
     public async exists( filePath: string ): Promise<boolean>
@@ -112,6 +169,28 @@ export class MemoryFileStore implements IFileStore
         const file = this.#files.get( filePath );
 
         return file ? structuredClone( file.metadata ) : null;
+    }
+
+    #reportSpend( entry: CategorySpendInput, context?: ExecutionContext ): void
+    {
+        if( this.#storagePricing && entry.costUSD === undefined )
+        {
+            const resolved = this.#storagePricing.resolveCost( entry );
+
+            if( resolved > 0 )
+            {
+                entry.costUSD = resolved;
+            }
+        }
+
+        if( context )
+        {
+            context.reportSpend( entry );
+        }
+        else if( this.#tracker )
+        {
+            this.#tracker.recordCategorySpend( entry );
+        }
     }
 
     private async readWebStream( stream: ReadableStream<Uint8Array> ): Promise<Uint8Array>
@@ -158,16 +237,21 @@ export class MemoryFileStore implements IFileStore
 
 export class LocalDiskFileStore implements IFileStore
 {
-    readonly #baseDir: string;
+    readonly #baseDir         : string;
+    readonly #tracker?        : SpendTracker;
+    readonly #storagePricing? : UnitCostRegistry;
 
-    constructor( baseDir: string )
+    constructor( baseDir: string, options: FileStoreOptions = {} )
     {
         this.#baseDir = path.resolve( baseDir );
+        this.#tracker = options.tracker;
+        this.#storagePricing = options.storagePricing;
     }
 
     public async write( 
         filePath: string, 
-        content: Uint8Array | string | ReadableStream<Uint8Array> 
+        content: Uint8Array | string | ReadableStream<Uint8Array>, 
+        options?: FileStoreOperationOptions 
     ): Promise<FileMetadata>
     {
         const fullPath = this.resolveSafePath( filePath );
@@ -195,6 +279,13 @@ export class LocalDiskFileStore implements IFileStore
 
         const stat = await fsPromises.stat( fullPath );
 
+        this.#reportSpend( {
+            category    : 'storage',
+            subcategory : 'file_write',
+            units       : stat.size,
+            unitType    : 'bytes'
+        }, options?.context );
+
         return {
             path      : filePath,
             size      : stat.size,
@@ -203,13 +294,20 @@ export class LocalDiskFileStore implements IFileStore
         };
     }
 
-    public async read( filePath: string ): Promise<Uint8Array | null>
+    public async read( filePath: string, options?: FileStoreOperationOptions ): Promise<Uint8Array | null>
     {
         const fullPath = this.resolveSafePath( filePath );
 
         try
         {
             const buffer = await fsPromises.readFile( fullPath );
+
+            this.#reportSpend( {
+                category    : 'storage',
+                subcategory : 'file_read',
+                units       : buffer.byteLength,
+                unitType    : 'bytes'
+            }, options?.context );
 
             return new Uint8Array( buffer.buffer, buffer.byteOffset, buffer.byteLength );
         }
@@ -224,14 +322,22 @@ export class LocalDiskFileStore implements IFileStore
         }
     }
 
-    public async readStream( filePath: string ): Promise<ReadableStream<Uint8Array> | null>
+    public async readStream( filePath: string, options?: FileStoreOperationOptions ): Promise<ReadableStream<Uint8Array> | null>
     {
         const fullPath = this.resolveSafePath( filePath );
 
         try
         {
             await fsPromises.access( fullPath );
+            const stat = await fsPromises.stat( fullPath );
             const nodeStream = fs.createReadStream( fullPath );
+
+            this.#reportSpend( {
+                category    : 'storage',
+                subcategory : 'file_read',
+                units       : stat.size,
+                unitType    : 'bytes'
+            }, options?.context );
 
             return Readable.toWeb( nodeStream ) as ReadableStream<Uint8Array>;
         }
@@ -246,13 +352,20 @@ export class LocalDiskFileStore implements IFileStore
         }
     }
 
-    public async delete( filePath: string ): Promise<boolean>
+    public async delete( filePath: string, options?: FileStoreOperationOptions ): Promise<boolean>
     {
         const fullPath = this.resolveSafePath( filePath );
 
         try
         {
             await fsPromises.unlink( fullPath );
+
+            this.#reportSpend( {
+                category    : 'storage',
+                subcategory : 'file_delete',
+                units       : 1,
+                unitType    : 'operations'
+            }, options?.context );
 
             return true;
         }
@@ -306,6 +419,28 @@ export class LocalDiskFileStore implements IFileStore
             }
 
             throw err;
+        }
+    }
+
+    #reportSpend( entry: CategorySpendInput, context?: ExecutionContext ): void
+    {
+        if( this.#storagePricing && entry.costUSD === undefined )
+        {
+            const resolved = this.#storagePricing.resolveCost( entry );
+
+            if( resolved > 0 )
+            {
+                entry.costUSD = resolved;
+            }
+        }
+
+        if( context )
+        {
+            context.reportSpend( entry );
+        }
+        else if( this.#tracker )
+        {
+            this.#tracker.recordCategorySpend( entry );
         }
     }
 
