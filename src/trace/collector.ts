@@ -137,15 +137,15 @@ export class TraceCollector extends EventEmitter
             } );
 
         const trace: Trace = 
-        {
-            traceId       : rootSpan.traceId,
-            threadId      : options.threadId,
-            agentId       : options.agentId,
-            startTime     : rootSpan.startTime,
-            rootSpan,
-            totalSpendUSD : 0,
-            categorySpend : { ...rootSpan.categorySpend }
-        };
+            {
+                traceId       : rootSpan.traceId,
+                threadId      : options.threadId,
+                agentId       : options.agentId,
+                startTime     : rootSpan.startTime,
+                rootSpan,
+                totalSpendUSD : 0,
+                categorySpend : { ...rootSpan.categorySpend }
+            };
 
         this.#activeTraces.set( trace.traceId, trace );
 
@@ -176,13 +176,13 @@ export class TraceCollector extends EventEmitter
         if( !span.parentSpanId && !this.#activeTraces.has( span.traceId ) )
         {
             const trace: Trace = 
-            {
-                traceId       : span.traceId,
-                startTime     : span.startTime,
-                rootSpan      : span,
-                totalSpendUSD : 0,
-                categorySpend : { ...span.categorySpend }
-            };
+                {
+                    traceId       : span.traceId,
+                    startTime     : span.startTime,
+                    rootSpan      : span,
+                    totalSpendUSD : 0,
+                    categorySpend : { ...span.categorySpend }
+                };
 
             this.#activeTraces.set( trace.traceId, trace );
             this.emit( 'trace:start', trace );

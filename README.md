@@ -15,8 +15,7 @@ High-performance, developer-first TypeScript AI toolkit providing protocol-level
 ## TL;DR
 
 ```typescript
-import { z } from 'zod';
-import { createModel, createTool, Agent, MemoryDocStore, CheckpointManager } from '@webergency-utils/ai';
+import { createModel, createTool, Agent, MemoryDocStore, CheckpointManager, schema } from '@webergency-utils/ai';
 
 // 1. Resolve model dynamically with zero external dependencies
 const model = createModel( {
@@ -24,12 +23,12 @@ const model = createModel( {
     model    : 'gpt-4o'
 });
 
-// 2. Define strongly-typed tools with Zod schemas
+// 2. Define strongly-typed tools with schemas
 const weatherTool = createTool( {
     name        : 'get_weather',
     description : 'Get the current weather forecast for a city',
-    parameters  : z.object( {
-        city : z.string().describe( 'City name' )
+    parameters  : schema.object( {
+        city : schema.string().describe( 'City name' )
     }),
     execute : async ( args ) => 
     {
@@ -56,12 +55,12 @@ console.log( result.text );
 Install the core package using your preferred package manager:
 
 ```bash
-npm install @webergency-utils/ai zod
+npm install @webergency-utils/ai
 ```
 
 ### Peer Dependencies
 
-The core library ships with zero required external dependencies outside of `zod`. Official vendor SDKs are optional peer dependencies loaded lazily if you choose to bridge an existing SDK client instance:
+The core library ships with zero required external dependencies outside of `@webergency-utils/typechecker`. Official vendor SDKs are optional peer dependencies loaded lazily if you choose to bridge an existing SDK client instance:
 
 ```bash
 # Optional: only if using the SDK bridge rather than built-in native fetch adapters
@@ -119,7 +118,7 @@ When using built-in native REST/SSE adapters without explicitly providing `apiKe
 - **`ModelProtocol`**: Normalized interface (`generate`, `stream`) implemented by all provider adapters.
 - **`ModelRegistry`**: Dynamic provider resolver that instantiates and caches provider adapters without boot-time static vendor imports.
 - **`BaseProviderAdapter`**: Abstract adapter base class handling HTTP request serialization, streaming SSE parsing, and standardized error mapping.
-- **`Tool`**: Executable function unit bundling a Zod or JSON Schema parameter validator, description, and execution logic.
+- **`Tool`**: Executable function unit bundling a JSON Schema / typechecker parameter validator, description, and execution logic.
 - **`Agent`**: Autonomous multi-turn agent loop executing tools, persisting checkpoints, and aggregating spend.
 - **`Workflow`**: Directed Acyclic Graph (DAG) builder supporting typed steps, retries, conditional branches, and Human-in-the-Loop interrupts (`WaitNode`).
 - **`WorkflowRunner`**: Execution engine running workflow DAGs, capturing step checkpoints, suspending on external signals, and resuming state.
@@ -265,9 +264,9 @@ import {
     UnitCostRegistry, 
     createTool, 
     MemoryVectorStore, 
-    Agent 
+    Agent,
+    schema
 } from '@webergency-utils/ai';
-import { z } from 'zod';
 
 // 1. Configure SpendTracker with aggregate cap and category ceilings
 const tracker = new SpendTracker( {
@@ -298,7 +297,7 @@ const vectorStore = new MemoryVectorStore( {
 const paidSearchTool = createTool( {
     name        : 'web_search',
     description : 'Execute paid web search API',
-    parameters  : z.object( { query : z.string() } ),
+    parameters  : schema.object( { query : schema.string() } ),
     execute     : async ( args, context ) => {
         // Direct USD cost reporting
         context?.reportSpend( {
@@ -324,15 +323,14 @@ console.log( tracker.categorySpend );
 Expose local toolkit tools to Cursor, Claude Desktop, or external MCP clients:
 
 ```typescript
-import { MCPServer, createTool } from '@webergency-utils/ai';
-import { z } from 'zod';
+import { MCPServer, createTool, schema } from '@webergency-utils/ai';
 
 const server = new MCPServer( { name : 'analytics-server', version : '1.0.0' } );
 
 server.registerTool( {
     name        : 'query_metric',
     description : 'Query daily active users metric',
-    parameters  : z.object( { date : z.string() } )
+    parameters  : schema.object( { date : schema.string() } )
 }, async ( args ) => {
     return { activeUsers : 42100 };
 });

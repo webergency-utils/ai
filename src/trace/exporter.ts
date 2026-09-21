@@ -80,17 +80,17 @@ export interface JSONExportOptions
 export function exportTraceToJSON( trace: Trace, options: JSONExportOptions = {} ): string
 {
     const serialized: SerializedTrace = 
-    {
-        traceId       : trace.traceId,
-        threadId      : trace.threadId,
-        agentId       : trace.agentId,
-        startTime     : trace.startTime,
-        endTime       : trace.endTime,
-        durationMs    : trace.durationMs,
-        rootSpan      : trace.rootSpan.toJSON(),
-        totalSpendUSD : trace.totalSpendUSD,
-        categorySpend : trace.categorySpend
-    };
+        {
+            traceId       : trace.traceId,
+            threadId      : trace.threadId,
+            agentId       : trace.agentId,
+            startTime     : trace.startTime,
+            endTime       : trace.endTime,
+            durationMs    : trace.durationMs,
+            rootSpan      : trace.rootSpan.toJSON(),
+            totalSpendUSD : trace.totalSpendUSD,
+            categorySpend : trace.categorySpend
+        };
 
     return JSON.stringify( serialized, null, options.pretty ? 2 : undefined );
 }
@@ -101,7 +101,7 @@ export function exportTraceToJSON( trace: Trace, options: JSONExportOptions = {}
  */
 function mapSpanKindToOTLP( kind: SpanKind ): number
 {
-    switch( kind )
+    switch ( kind )
     {
         case 'agent':
         case 'tool':
@@ -191,21 +191,21 @@ function flattenSpansToOTLP( span: Span, out: OTLPSpan[], traceId?: string ): vo
     }
 
     const otlpSpan: OTLPSpan = 
-    {
-        traceId           : resolvedTraceId,
-        spanId            : span.id,
-        parentSpanId      : span.parentSpanId,
-        name              : span.name,
-        kind              : mapSpanKindToOTLP( span.kind ),
-        startTimeUnixNano,
-        endTimeUnixNano,
-        attributes,
-        status : 
+        {
+            traceId      : resolvedTraceId,
+            spanId       : span.id,
+            parentSpanId : span.parentSpanId,
+            name         : span.name,
+            kind         : mapSpanKindToOTLP( span.kind ),
+            startTimeUnixNano,
+            endTimeUnixNano,
+            attributes,
+            status : 
         {
             code    : span.status === 'error' ? 2 : 1, // 1 = OK, 2 = ERROR
             message : span.errorDetails?.message
         }
-    };
+        };
 
     out.push( otlpSpan );
 

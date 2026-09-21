@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { z } from 'zod';
 import { MCPClient, InMemoryTransport } from '../../src/mcp/client.js';
 import { MCPServer } from '../../src/mcp/server.js';
 import { SimpleExecutionContext } from '../../src/agent/context.js';
 import { computeSpanRollup } from '../../src/trace/rollup.js';
+import { schema } from '../../src/core/index.js';
 
 describe( 'Cross-Boundary MCP Wire Propagation (U4)', () => 
 {
@@ -17,8 +17,8 @@ describe( 'Cross-Boundary MCP Wire Propagation (U4)', () =>
             {
                 name        : 'analyze',
                 description : 'Performs analytics with subcall database and LLM queries',
-                parameters  : z.object( {
-                    query : z.string()
+                parameters  : schema.object( {
+                    query : schema.string()
                 } )
             },
             async ( args, ctx ) => 

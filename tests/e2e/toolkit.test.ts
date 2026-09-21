@@ -1,5 +1,4 @@
 import { describe, it, expect, vi } from 'vitest';
-import { z } from 'zod';
 import { 
     createModel, 
     createTool, 
@@ -14,7 +13,8 @@ import {
     Workflow, 
     WorkflowRunner, 
     type ModelProtocol, 
-    type ModelResponse 
+    type ModelResponse,
+    schema 
 } from '../../src/index.js';
 
 describe( 'E2E AI Toolkit Integration Pipeline', () => 
@@ -26,16 +26,16 @@ describe( 'E2E AI Toolkit Integration Pipeline', () =>
         const checkpointManager = new CheckpointManager( docStore );
         const spendTracker = new SpendTracker();
 
-        // 2. Define Tools with Zod
+        // 2. Define Tools with schema builder
         const convertCurrencyTool = createTool( 
             {
                 name        : 'convert_currency',
                 description : 'Convert amount from USD to EUR',
-                parameters  : z.object( 
+                parameters  : schema.object( 
                     {
-                        amountUSD : z.number().describe( 'Amount in USD' )
+                        amountUSD : schema.number( { description : 'Amount in USD' } )
                     } ),
-                execute : async ( args ) => 
+                execute : async ( args: { amountUSD : number } ) => 
                 {
                     return { amountEUR : args.amountUSD * 0.92, rate : 0.92 };
                 }

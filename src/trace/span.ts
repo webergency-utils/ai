@@ -51,15 +51,15 @@ export class SpanImpl implements Span
         this.metrics = { ...( options.metrics ?? {} ) };
         this.spendUSD = 0;
         this.categorySpend = 
-        {
-            model   : 0,
-            storage : 0,
-            compute : 0,
-            network : 0,
-            mcp     : 0,
-            tools   : 0,
-            custom  : 0
-        };
+            {
+                model   : 0,
+                storage : 0,
+                compute : 0,
+                network : 0,
+                mcp     : 0,
+                tools   : 0,
+                custom  : 0
+            };
         this.children = [];
     }
 

@@ -1,145 +1,134 @@
-import type { z } from 'zod';
+import type { JsonSchema } from '@webergency-utils/typechecker';
+export type { JsonSchema } from '@webergency-utils/typechecker';
+export { validateSchema, assertSchema } from '@webergency-utils/typechecker';
 
-interface ZodDefLike
+export interface StringSchemaOptions
 {
-    typeName?: string
-    description?: string
-    values?: string[] | Record<string, string>
-    value?: unknown
-    type?: z.ZodTypeAny
-    innerType?: z.ZodTypeAny
-    valueType?: z.ZodTypeAny
-    options?: z.ZodTypeAny[]
-    shape?: () => Record<string, z.ZodTypeAny>
+    description? : string
+    minLength?   : number
+    maxLength?   : number
+    pattern?     : string
+    enum?        : string[]
+    default?     : string
 }
 
-interface ZodLike
+export interface NumberSchemaOptions
 {
-    _def?: ZodDefLike
+    description? : string
+    minimum?     : number
+    maximum?     : number
+    multipleOf?  : number
+    default?     : number
 }
 
-export function zodToJsonSchema( schema?: z.ZodTypeAny | Record<string, unknown> ): Record<string, unknown>
+export interface BooleanSchemaOptions
 {
-    if( !schema )
+    description? : string
+    default?     : boolean
+}
+
+export interface ArraySchemaOptions
+{
+    description? : string
+    minItems?    : number
+    maxItems?    : number
+    uniqueItems? : boolean
+}
+
+export interface ObjectSchemaOptions
+{
+    description?          : string
+    required?             : string[]
+    additionalProperties? : boolean | JsonSchema
+}
+
+export interface EnumSchemaOptions
+{
+    description? : string
+}
+
+export const schema = 
+    {
+        string( options: StringSchemaOptions = {} ): JsonSchema
+        {
+            return {
+                type : 'string',
+                ...options
+            };
+        },
+
+        number( options: NumberSchemaOptions = {} ): JsonSchema
+        {
+            return {
+                type : 'number',
+                ...options
+            };
+        },
+
+        integer( options: NumberSchemaOptions = {} ): JsonSchema
+        {
+            return {
+                type : 'integer',
+                ...options
+            };
+        },
+
+        boolean( options: BooleanSchemaOptions = {} ): JsonSchema
+        {
+            return {
+                type : 'boolean',
+                ...options
+            };
+        },
+
+        array( items: JsonSchema, options: ArraySchemaOptions = {} ): JsonSchema
+        {
+            return {
+                type : 'array',
+                items,
+                ...options
+            };
+        },
+
+        enum( values: ( string | number )[], options: EnumSchemaOptions = {} ): JsonSchema
+        {
+            return {
+                type : typeof values[ 0 ] === 'number' ? 'number' : 'string',
+                enum : values,
+                ...options
+            };
+        },
+
+        object( 
+            properties: Record<string, JsonSchema> = {}, 
+            options: ObjectSchemaOptions = {} 
+        ): JsonSchema
+        {
+            return {
+                type     : 'object',
+                properties,
+                required : options.required ?? Object.keys( properties ),
+                ...( options.description ? { description : options.description } : {} ),
+                ...( options.additionalProperties !== undefined ? { additionalProperties : options.additionalProperties } : {} )
+            };
+        }
+    };
+
+export function toJsonSchema( schemaInput?: JsonSchema | Record<string, unknown> ): Record<string, unknown>
+{
+    if( !schemaInput || typeof schemaInput !== 'object' )
     {
         return { type : 'object', properties : {} };
     }
 
-    if( !( '_def' in schema ) )
+    const result = { ...( schemaInput as Record<string, unknown> ) };
+
+    if( !result.type && !result.anyOf && !result.oneOf && !result.allOf )
     {
-        return schema as Record<string, unknown>;
-    }
-
-    return parseZodType( schema as z.ZodTypeAny );
-}
-
-function parseZodType( schema: z.ZodTypeAny ): Record<string, unknown>
-{
-    const def = ( schema as unknown as ZodLike )._def;
-
-    if( !def )
-    {
-        return {};
-    }
-
-    const typeName = def.typeName;
-    const result: Record<string, unknown> = {};
-
-    if( def.description )
-    {
-        result.description = def.description;
-    }
-
-    switch ( typeName )
-    {
-        case 'ZodString':
-            result.type = 'string';
-            break;
-
-        case 'ZodNumber':
-            result.type = 'number';
-            break;
-
-        case 'ZodBoolean':
-            result.type = 'boolean';
-            break;
-
-        case 'ZodNull':
-            result.type = 'null';
-            break;
-
-        case 'ZodArray':
-            result.type = 'array';
-            result.items = def.type ? parseZodType( def.type ) : {};
-            break;
-
-        case 'ZodObject':
-        {
-            result.type = 'object';
-            const shape = def.shape ? def.shape() : {};
-            const properties: Record<string, unknown> = {};
-            const required: string[] = [];
-
-            for( const [ key, childSchema ] of Object.entries( shape ) )
-            {
-                const childDef = ( childSchema as unknown as ZodLike )._def;
-                properties[key] = parseZodType( childSchema );
-
-                const isOptional = childDef?.typeName === 'ZodOptional' || childDef?.typeName === 'ZodDefault';
-
-                if( !isOptional )
-                {
-                    required.push( key );
-                }
-            }
-
-            result.properties = properties;
-
-            if( required.length > 0 )
-            {
-                result.required = required;
-            }
-            break;
-        }
-
-        case 'ZodEnum':
-            result.type = 'string';
-            result.enum = Array.isArray( def.values ) ? def.values : [];
-            break;
-
-        case 'ZodNativeEnum':
-            result.type = 'string';
-            result.enum = def.values && typeof def.values === 'object' 
-                ? Object.values( def.values ) 
-                : [];
-            break;
-
-        case 'ZodLiteral':
-            result.const = def.value;
-            break;
-
-        case 'ZodOptional':
-        case 'ZodNullable':
-        case 'ZodDefault':
-            return def.innerType ? parseZodType( def.innerType ) : {};
-
-        case 'ZodUnion':
-        case 'ZodDiscriminatedUnion':
-            result.anyOf = ( def.options ?? [] ).map( ( opt ) => 
-            {
-                return parseZodType( opt );
-            } );
-            break;
-
-        case 'ZodRecord':
-            result.type = 'object';
-            result.additionalProperties = def.valueType ? parseZodType( def.valueType ) : {};
-            break;
-
-        default:
-            result.type = 'object';
-            break;
+        result.type = 'object';
     }
 
     return result;
 }
+
+export const zodToJsonSchema = toJsonSchema;

@@ -1,5 +1,5 @@
 import type { ToolDefinition } from '../core/types.js';
-import { zodToJsonSchema } from '../core/schema.js';
+import { toJsonSchema } from '../core/schema.js';
 import type { 
     JSONRPCMessage, 
     JSONRPCRequest, 
@@ -91,7 +91,7 @@ export class MCPServer
                         {
                             name        : definition.name,
                             description : definition.description,
-                            inputSchema : zodToJsonSchema( definition.parameters )
+                            inputSchema : toJsonSchema( definition.parameters )
                         } );
                 }
 

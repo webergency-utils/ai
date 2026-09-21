@@ -1,4 +1,5 @@
-import type { z } from 'zod';
+import type { JsonSchema } from '@webergency-utils/typechecker';
+import { validateSchema } from '@webergency-utils/typechecker';
 import type { ToolDefinition } from '../core/types.js';
 import { InvalidInputError } from '../core/error.js';
 import type { ExecutionContext } from './context.js';
@@ -10,7 +11,7 @@ export interface ToolConfig<TArgs = Record<string, unknown>, TResult = unknown>
 {
     name        : string
     description : string
-    parameters  : z.ZodType<TArgs> | Record<string, unknown>
+    parameters  : JsonSchema | Record<string, unknown>
     execute     : ToolExecutor<TArgs, TResult>
 }
 
@@ -18,7 +19,7 @@ export class Tool<TArgs = Record<string, unknown>, TResult = unknown>
 {
     public readonly name        : string;
     public readonly description : string;
-    public readonly parameters  : z.ZodType<TArgs> | Record<string, unknown>;
+    public readonly parameters  : JsonSchema | Record<string, unknown>;
     readonly #executor          : ToolExecutor<TArgs, TResult>;
 
     constructor( config: ToolConfig<TArgs, TResult> )
@@ -33,19 +34,23 @@ export class Tool<TArgs = Record<string, unknown>, TResult = unknown>
     {
         let validArgs: TArgs;
 
-        if( this.isZodSchema( this.parameters ) )
+        if( this.parameters && typeof this.parameters === 'object' && Object.keys( this.parameters ).length > 0 )
         {
-            const parsed = this.parameters.safeParse( rawArgs );
+            const validation = validateSchema<TArgs>( this.parameters as JsonSchema, rawArgs, 'strip' );
 
-            if( !parsed.success )
+            if( !validation.success )
             {
+                const errorMsg = validation.errors && validation.errors.length > 0
+                    ? validation.errors.map( ( e ) => `${e.path || 'root'}: ${e.error}` ).join( ', ' )
+                    : 'Validation failed';
+
                 throw new InvalidInputError( 
-                    `Invalid arguments for tool '${this.name}': ${parsed.error.message}`, 
-                    parsed.error 
+                    `Invalid arguments for tool '${this.name}': ${errorMsg}`, 
+                    validation.errors 
                 );
             }
 
-            validArgs = parsed.data;
+            validArgs = validation.data !== undefined ? validation.data : ( ( rawArgs ?? {} ) as TArgs );
         }
         else
         {
@@ -62,11 +67,6 @@ export class Tool<TArgs = Record<string, unknown>, TResult = unknown>
             description : this.description,
             parameters  : this.parameters
         };
-    }
-
-    private isZodSchema( schema: unknown ): schema is z.ZodType<TArgs>
-    {
-        return typeof schema === 'object' && schema !== null && 'safeParse' in schema;
     }
 }
 

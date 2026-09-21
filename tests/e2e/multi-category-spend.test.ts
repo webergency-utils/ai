@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { z } from 'zod';
 import 
 {
+    schema,
     createTool,
     Agent,
     MemoryVectorStore,
@@ -46,8 +46,8 @@ describe( 'E2E Multi-Category Spend & Telemetry Pipeline', () =>
         const knowledgeSearchTool = createTool( {
             name        : 'search_knowledge',
             description : 'Search the knowledge base',
-            parameters  : z.object( {
-                query : z.string()
+            parameters  : schema.object( {
+                query : schema.string()
             } ),
             execute : async ( args, context ) => 
             {
@@ -162,7 +162,7 @@ describe( 'E2E Multi-Category Spend & Telemetry Pipeline', () =>
         const paidApiTool = createTool( {
             name        : 'paid_api',
             description : 'Expensive API',
-            parameters  : z.object( {} ),
+            parameters  : schema.object( {} ),
             execute     : async ( _args, context ) => 
             {
                 if( context )

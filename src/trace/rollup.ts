@@ -9,15 +9,15 @@ export function computeSpanRollup( span: Span ): SpanRollup
 {
     let totalSpendUSD = span.spendUSD;
     const categorySpend: CategorySpendBreakdown = 
-    {
-        model   : span.categorySpend.model,
-        storage : span.categorySpend.storage,
-        compute : span.categorySpend.compute,
-        network : span.categorySpend.network,
-        mcp     : span.categorySpend.mcp,
-        tools   : span.categorySpend.tools,
-        custom  : span.categorySpend.custom
-    };
+        {
+            model   : span.categorySpend.model,
+            storage : span.categorySpend.storage,
+            compute : span.categorySpend.compute,
+            network : span.categorySpend.network,
+            mcp     : span.categorySpend.mcp,
+            tools   : span.categorySpend.tools,
+            custom  : span.categorySpend.custom
+        };
 
     const metrics: SpanMetrics = { ...span.metrics };
     let subcallCount = 0;
@@ -53,12 +53,12 @@ export function computeSpanRollup( span: Span ): SpanRollup
         ( span.endTime ? Math.max( 0, span.endTime - span.startTime ) : 0 );
 
     const rollup: SpanRollup = 
-    {
-        totalDurationMs,
-        totalSpendUSD,
-        categorySpend,
-        metrics
-    };
+        {
+            totalDurationMs,
+            totalSpendUSD,
+            categorySpend,
+            metrics
+        };
 
     span.rollup = rollup;
 

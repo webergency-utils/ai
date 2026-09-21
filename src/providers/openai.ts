@@ -8,7 +8,7 @@ import type {
     ToolCall,
     UsageMetrics
 } from '../core/types.js';
-import { zodToJsonSchema } from '../core/schema.js';
+import { toJsonSchema } from '../core/schema.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
 
 interface RawOpenAIToolCall
@@ -233,7 +233,7 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
                     {
                         name        : tool.name,
                         description : tool.description,
-                        parameters  : zodToJsonSchema( tool.parameters )
+                        parameters  : toJsonSchema( tool.parameters )
                     }
                 };
             } );

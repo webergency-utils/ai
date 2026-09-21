@@ -16,9 +16,10 @@ module.exports.fuzz = async function( data )
 
         const str = data.toString( 'utf8' );
 
-        // 1. Fuzz zodToJsonSchema
+        // 1. Fuzz toJsonSchema / zodToJsonSchema
         try
         {
+            ai.toJsonSchema( { type : str.slice( 0, 10 ) } );
             ai.zodToJsonSchema( { type : str.slice( 0, 10 ) } );
         }
         catch

@@ -123,7 +123,7 @@ export class Agent
             activeTools = await this.#jitRetriever.retrieveTools( input );
         }
 
-        const toolDefs: ToolDefinition[] = activeTools.map( ( t ) => { return t.toDefinition(); } );
+        const toolDefs: ToolDefinition[] = activeTools.map( ( t ) => {return t.toDefinition();} );
         const toolMap = new Map<string, Tool>( activeTools.map( ( t ) => [ t.name, t ] ) );
 
         let finalText = '';

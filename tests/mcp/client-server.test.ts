@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { z } from 'zod';
 import { 
     MCPServer, 
     MCPClient, 
     InMemoryTransport 
 } from '../../src/mcp/index.js';
 import type { ToolDefinition } from '../../src/core/types.js';
+import { schema } from '../../src/core/index.js';
 
 describe( 'Model Context Protocol (MCP) Client & Server', () => 
 {
@@ -20,10 +20,10 @@ describe( 'Model Context Protocol (MCP) Client & Server', () =>
             {
                 name        : 'add',
                 description : 'Add two numbers',
-                parameters  : z.object( 
+                parameters  : schema.object( 
                     {
-                        a : z.number().describe( 'First number' ),
-                        b : z.number().describe( 'Second number' )
+                        a : schema.number( { description : 'First number' } ),
+                        b : schema.number( { description : 'Second number' } )
                     } )
             };
 

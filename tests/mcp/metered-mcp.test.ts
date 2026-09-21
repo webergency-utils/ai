@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { z } from 'zod';
 import 
 {
     MCPClient,
@@ -8,6 +7,7 @@ import
 } from '../../src/mcp/index.js';
 import { SpendTracker } from '../../src/spend/index.js';
 import { SimpleExecutionContext } from '../../src/agent/context.js';
+import { schema } from '../../src/core/index.js';
 
 describe( 'Metered MCP Client & Server', () => 
 {
@@ -19,8 +19,8 @@ describe( 'Metered MCP Client & Server', () =>
         server.registerTool( {
             name        : 'fetch_weather',
             description : 'Fetch current weather',
-            parameters  : z.object( {
-                city : z.string()
+            parameters  : schema.object( {
+                city : schema.string()
             } )
         }, async ( args ) => 
         {
@@ -75,7 +75,7 @@ describe( 'Metered MCP Client & Server', () =>
         server.registerTool( {
             name        : 'ping',
             description : 'Ping tool',
-            parameters  : z.object( {} )
+            parameters  : schema.object( {} )
         }, async () => 
         {
             return 'pong';
@@ -106,7 +106,7 @@ describe( 'Metered MCP Client & Server', () =>
         server.registerTool( {
             name        : 'compute_task',
             description : 'Heavy compute task',
-            parameters  : z.object( { n : z.number() } )
+            parameters  : schema.object( { n : schema.number() } )
         }, async ( args, ctx ) => 
         {
             if( ctx )

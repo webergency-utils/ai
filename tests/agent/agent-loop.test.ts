@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { z } from 'zod';
 import { Agent, createTool, CheckpointManager } from '../../src/agent/index.js';
+import { schema } from '../../src/core/index.js';
 import { MemoryDocStore } from '../../src/storage/index.js';
 import { SpendTracker } from '../../src/spend/index.js';
 import type { ModelProtocol } from '../../src/core/protocol.js';
@@ -18,8 +18,8 @@ describe( 'Autonomous Agent Tool Execution Loop', () =>
             {
                 name        : 'get_weather',
                 description : 'Get city weather',
-                parameters  : z.object( { city : z.string() } ),
-                execute     : async ( args ) => 
+                parameters  : schema.object( { city : schema.string() } ),
+                execute     : async ( args: { city : string } ) => 
                 {
                     return { city : args.city, temp : '22C', condition : 'Sunny' };
                 }

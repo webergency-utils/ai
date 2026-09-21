@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { z } from 'zod';
 import { 
     createTool, 
     SimpleExecutionContext, 
-    type CategorySpendInput 
+    type CategorySpendInput,
+    schema
 } from '../../src/index.js';
 
 describe( 'Ambient ExecutionContext & Tool Reporter Hooks (U2)', () => 
@@ -24,10 +24,10 @@ describe( 'Ambient ExecutionContext & Tool Reporter Hooks (U2)', () =>
         const searchTool = createTool( {
             name        : 'web_search',
             description : 'Performs web search and incurs third-party API spend',
-            parameters  : z.object( {
-                query : z.string()
+            parameters  : schema.object( {
+                query : schema.string()
             } ),
-            execute : async( args, ctx ) => 
+            execute : async( args: { query : string }, ctx ) => 
             {
                 ctx?.reportSpend( {
                     category    : 'tools',
@@ -62,11 +62,11 @@ describe( 'Ambient ExecutionContext & Tool Reporter Hooks (U2)', () =>
         const addTool = createTool( {
             name        : 'add',
             description : 'Add two numbers',
-            parameters  : z.object( {
-                a : z.number(),
-                b : z.number()
+            parameters  : schema.object( {
+                a : schema.number(),
+                b : schema.number()
             } ),
-            execute : async( { a, b }, ctx ) => 
+            execute : async( { a, b }: { a : number; b : number }, ctx ) => 
             {
                 // ctx may be undefined
                 ctx?.reportSpend( { category : 'compute', costUSD : 0.0001 } );

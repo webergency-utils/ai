@@ -143,11 +143,11 @@ export type TraceEventType =
     | 'trace:complete';
 
 export type TraceEvent = 
-    | { type : 'span:start'; span : Span }
-    | { type : 'span:end'; span : Span }
-    | { type : 'trace:start'; trace : Trace }
-    | { type : 'trace:end'; trace : Trace }
-    | { type : 'trace:complete'; trace : Trace };
+    | { type : 'span:start', span : Span }
+    | { type : 'span:end', span : Span }
+    | { type : 'trace:start', trace : Trace }
+    | { type : 'trace:end', trace : Trace }
+    | { type : 'trace:complete', trace : Trace };
 
 export interface TraceEvents
 {

@@ -60,7 +60,7 @@
         "test:watch": "vitest"
     },
     "dependencies": {
-        "zod": "^3.24.2"
+        "@webergency-utils/typechecker": "^0.8.1"
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
@@ -74,8 +74,8 @@
     "peerDependencies": {
         "@anthropic-ai/sdk": ">=0.30.0",
         "@google/genai": ">=0.1.0",
-        "openai": ">=4.0.0",
-        "ollama": ">=0.5.0"
+        "ollama": ">=0.5.0",
+        "openai": ">=4.0.0"
     },
     "peerDependenciesMeta": {
         "@anthropic-ai/sdk": {

@@ -7,7 +7,7 @@ import type {
     ToolCall,
     UsageMetrics
 } from '../core/types.js';
-import { zodToJsonSchema } from '../core/schema.js';
+import { toJsonSchema } from '../core/schema.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
 
 interface RawAnthropicUsage
@@ -285,7 +285,7 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                 return {
                     name         : tool.name,
                     description  : tool.description,
-                    input_schema : zodToJsonSchema( tool.parameters )
+                    input_schema : toJsonSchema( tool.parameters )
                 };
             } );
 

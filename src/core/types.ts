@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { JsonSchema } from '@webergency-utils/typechecker';
 
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
 
@@ -42,7 +42,7 @@ export type ToolDefinition =
     {
         name        : string
         description : string
-        parameters  : z.ZodTypeAny | Record<string, unknown>
+        parameters  : JsonSchema | Record<string, unknown>
     }
 
 export type UsageMetrics =

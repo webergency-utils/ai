@@ -8,7 +8,7 @@ import type {
     ToolCall,
     UsageMetrics
 } from '../core/types.js';
-import { zodToJsonSchema } from '../core/schema.js';
+import { toJsonSchema } from '../core/schema.js';
 import { createStreamChunk } from '../core/stream.js';
 
 interface RawOllamaToolCall
@@ -204,7 +204,7 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
                     {
                         name        : tool.name,
                         description : tool.description,
-                        parameters  : zodToJsonSchema( tool.parameters )
+                        parameters  : toJsonSchema( tool.parameters )
                     }
                 };
             } );

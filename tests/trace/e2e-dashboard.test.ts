@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { z } from 'zod';
+import { schema } from '../../src/core/index.js';
 import { Agent, createTool } from '../../src/agent/index.js';
 import { MemoryDocStore } from '../../src/storage/index.js';
 import { SpendTracker, UnitCostRegistry } from '../../src/spend/index.js';
@@ -43,7 +43,7 @@ describe( 'Hierarchical Tracing E2E Dashboard Flow (U7)', () =>
             {
                 name        : 'fetch_intel', 
                 description : 'Fetches classified intel and executes secondary analysis', 
-                parameters  : z.object( { reportId : z.string() } )
+                parameters  : schema.object( { reportId : schema.string() } )
             }, 
             async ( args, context ) => 
             {
@@ -98,7 +98,7 @@ describe( 'Hierarchical Tracing E2E Dashboard Flow (U7)', () =>
             {
                 name        : 'get_intel_report',
                 description : 'Calls remote MCP intel service',
-                parameters  : z.object( { reportId : z.string() } ),
+                parameters  : schema.object( { reportId : schema.string() } ),
                 execute     : async ( args, context ) => 
                 {
                     const result = await client.callTool( 'fetch_intel', args, { context } );
@@ -316,7 +316,7 @@ describe( 'Hierarchical Tracing E2E Dashboard Flow (U7)', () =>
             {
                 name        : 'failing_tool',
                 description : 'A tool that fails',
-                parameters  : z.object( { reason : z.string() } ),
+                parameters  : schema.object( { reason : schema.string() } ),
                 execute     : async () => 
                 {
                     throw new Error( 'Remote database connection timeout' );
