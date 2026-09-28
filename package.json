@@ -46,6 +46,10 @@
         "./workflow": {
             "types": "./dist/workflow/index.d.ts",
             "import": "./dist/workflow/index.js"
+        },
+        "./trace": {
+            "types": "./dist/trace/index.d.ts",
+            "import": "./dist/trace/index.js"
         }
     },
     "files": [
@@ -54,6 +58,7 @@
     "scripts": {
         "build": "tsc",
         "clean": "rm -rf ./dist",
+        "prepack": "npm run clean && npm run build",
         "lint": "eslint \"src/**/*.ts\"",
         "lint:fix": "eslint \"src/**/*.ts\" --fix",
         "test": "vitest run",
