@@ -123,8 +123,8 @@ When using built-in native REST/SSE adapters without explicitly providing `apiKe
 - **`Agent`**: Autonomous multi-turn agent loop executing tools, persisting checkpoints, and aggregating spend.
 - **`Workflow`**: Directed Acyclic Graph (DAG) builder supporting typed steps, retries, conditional branches, and Human-in-the-Loop interrupts (`WaitNode`).
 - **`WorkflowRunner`**: Execution engine running workflow DAGs, capturing step checkpoints, suspending on external signals, and resuming state.
-- **`MCPClient`**: Client implementing the Model Context Protocol over stdio child processes or HTTP SSE streams.
-- **`MCPServer`**: Server utility exposing local tools and agents as an MCP-compliant JSON-RPC service.
+- **`MCPClient`**: Client implementing the Model Context Protocol (version-negotiated, capability-aware) over stdio child processes, Streamable HTTP, or legacy HTTP+SSE.
+- **`MCPServer`**: Server exposing tools, resources and prompts as an MCP-compliant JSON-RPC service; mount it over HTTP with `createMCPHttpHandler`.
 - **`SpendCalculator`**: Financial engine computing exact USD token spend accounting for prompt caching discounts and reasoning models.
 - **`SpendTracker`**: Aggregator tracking token spend across runs, threads, and agents with hard budget cap guardrails.
 
@@ -337,20 +337,114 @@ server.registerTool( {
 });
 ```
 
-#### MCP Client
-
-Connect to external MCP servers via `stdio` or `SSE`:
+Resources and prompts are registered next to tools. Capabilities are advertised only for the kinds you registered (`tools` is always advertised):
 
 ```typescript
-import { MCPClient, StdioTransport } from '@webergency-utils/ai';
+server.registerResource(
+    { uri : 'file:///readme.md', name : 'readme', mimeType : 'text/markdown' },
+    async () => '# Hello'                                   // string, { text }, { blob } (base64), or an array of those
+);
 
-const transport = new StdioTransport( 'npx', [ '-y', '@modelcontextprotocol/server-memory' ] );
-const client = new MCPClient( transport );
-await client.connect();
+server.registerResourceTemplate(
+    { uriTemplate : 'user://{org}/{id}', name : 'user' },   // RFC 6570 level 1 only: `{var}`; other operators throw
+    async ( uri, vars ) => JSON.stringify( vars )
+);
 
-const tools = await client.listTools();
-const toolDefs = await client.toToolDefinitions(); // Definitions only (no `execute`)
+server.registerPrompt(
+    { name : 'greet', arguments : [ { name : 'who', required : true } ] },
+    async ( args ) => [ { role : 'user', content : { type : 'text', text : `Hello ${args.who}` } } ]
+);
 ```
+
+Unknown URIs, unknown prompts, missing/undeclared prompt arguments answer `-32602`; a reader returning both or neither of `text` / `blob` is a `-32603` error.
+
+#### Serving over HTTP
+
+`createMCPHttpHandler( server, options? )` returns a web-standard `( req: Request ) => Promise<Response>` implementing the Streamable HTTP server side (JSON responses; no server-initiated stream, so `GET` is `405`):
+
+```typescript
+import { createServer } from 'node:http';
+import { createMCPHttpHandler } from '@webergency-utils/ai';
+
+const handler = createMCPHttpHandler( server, {
+    sessions            : true,                         // issue Mcp-Session-Id; default false (stateless)
+    allowedOrigins      : [ 'https://app.example' ],    // default: Origin, if present, must be same-origin (DNS-rebinding guard)
+    authenticate        : async ( req ) => verify( req.headers.get( 'authorization' ) )
+        ? { ok : true }
+        : { ok : false, error : 'invalid_token' },       // -> 401 + WWW-Authenticate: Bearer ...
+    resourceMetadataUrl : 'https://mcp.example/.well-known/oauth-protected-resource',
+    maxBodyBytes        : 4 * 1024 * 1024                // -> 413 beyond this
+} );
+
+// Node adapter (Bun.serve( { fetch : handler } ) needs none)
+createServer( async ( req, res ) => {
+    const chunks: Buffer[] = [];
+    for await ( const chunk of req ) chunks.push( chunk );
+
+    const response = await handler( new Request( `http://${req.headers.host}${req.url}`, {
+        method  : req.method,
+        headers : req.headers as Record<string, string>,
+        body    : [ 'GET', 'HEAD' ].includes( req.method! ) ? undefined : Buffer.concat( chunks )
+    } ) );
+
+    res.writeHead( response.status, Object.fromEntries( response.headers ) );
+    res.end( Buffer.from( await response.arrayBuffer() ) );
+} ).listen( 3000 );
+```
+
+Origin and `authenticate` run before the body is read. Sessions live in memory (`sessionTtlMs`, default 30 min; `maxSessions`, default 1000, beyond which `initialize` gets `503`); `DELETE` ends one. Batched POSTs are accepted; `initialize` must not be batched.
+
+#### MCP Client
+
+`connectMCPClient( url, options? )` connects over HTTP: it tries Streamable HTTP and falls back to the legacy SSE transport only when the server answers `400`/`404`/`405`. Other failures (auth, version mismatch, network) are thrown, not masked.
+
+```typescript
+import { connectMCPClient, MCPClient, StdioTransport, StreamableHTTPTransport } from '@webergency-utils/ai';
+
+const client = await connectMCPClient( 'https://mcp.example/mcp', {
+    authProvider : {
+        getHeaders     : async () => ( { authorization : `Bearer ${await tokens.get()}` } ),
+        onUnauthorized : async () => { await tokens.refresh(); return true; }   // called once per request on 401; true = retry once
+    }
+} );
+
+// Or pick the transport yourself:
+const http  = new MCPClient( new StreamableHTTPTransport( 'https://mcp.example/mcp', { headers : { 'x-tenant' : 'acme' }, listen : true } ) );
+const stdio = new MCPClient( new StdioTransport( 'npx', [ '-y', '@modelcontextprotocol/server-memory' ] ) );
+await stdio.connect();
+
+const tools = await stdio.listTools();                  // follows nextCursor (maxPages, default 100)
+const toolDefs = await stdio.toToolDefinitions();      // Definitions only (no `execute`)
+```
+
+`connect()` negotiates the protocol revision (offers the newest of `SUPPORTED_PROTOCOL_VERSIONS`; a server answering with anything else closes the transport and throws `MCP_PROTOCOL_VERSION_UNSUPPORTED`) and exposes `negotiatedVersion`, `serverCapabilities`, `serverInfo` and `instructions`. Methods need the matching server capability: `listResources()` against a tools-only server throws `MCP_CAPABILITY_MISSING` before anything is sent (`connect( { strictCapabilities : false } )` opts out).
+
+```typescript
+const resources = await client.listResources();
+const [ readme ] = await client.readResource( 'file:///readme.md' );   // { uri, mimeType?, text | blob }
+const prompts   = await client.listPrompts();
+const prompt    = await client.getPrompt( 'greet', { who : 'Ada' } );  // { description?, messages }
+await client.ping();
+
+const off = client.onNotification( ( n ) => console.log( n.method, n.params ) );
+```
+
+Server-initiated traffic is handled, not dropped: `ping` is answered, other requests (`roots/list`, sampling, ...) get `-32601`, and notifications reach `onNotification`. Failures with no request to reject (a throwing notification handler, a dropped listening stream, malformed SSE) go to `new MCPClient( transport, { onError } )`; without `onError` they are rethrown asynchronously.
+
+**Auth** is a hook, not an OAuth client: `headers` and `authProvider` apply to `StreamableHTTPTransport` and `SSETransport`. A `401` calls `onUnauthorized` once and retries once; otherwise `MCPAuthError` (`MCP_UNAUTHORIZED`) carries the parsed `WWW-Authenticate` challenge and `resourceMetadata` URL. A `403` is `MCP_FORBIDDEN`. Credentials never appear in errors or spans. Full OAuth 2.1 (PKCE, dynamic client registration, token storage) is out of scope.
+
+| Error code | Meaning |
+| --- | --- |
+| `MCP_PROTOCOL_VERSION_UNSUPPORTED` | Server answered `initialize` with a revision outside `SUPPORTED_PROTOCOL_VERSIONS` |
+| `MCP_CAPABILITY_MISSING` | Server did not advertise `tools` / `resources` / `prompts` |
+| `MCP_NOT_CONNECTED` | A method was called before `connect()` completed |
+| `MCP_SESSION_EXPIRED` | `404` after a session id was issued (reconnect; no automatic re-initialize) |
+| `MCP_UNAUTHORIZED` / `MCP_FORBIDDEN` | `401` (after the single retry) / `403` |
+| `MCP_PROTOCOL_ERROR` | Malformed JSON-RPC, SSE event, or result shape from the peer |
+| `MCP_TRANSPORT_ERROR` | Non-2xx HTTP (status and truncated body in `details`), dropped stream, endpoint timeout |
+| `MCP_PAGINATION_LIMIT` / `MCP_PAGINATION_LOOP` | `maxPages` exceeded / repeated cursor |
+| `MCP_INVALID_RESOURCE_CONTENT` | Resource contents with both or neither of `text` / `blob` |
+| `MCP_INVALID_URI_TEMPLATE` | Unsupported RFC 6570 expression in a resource template |
 
 #### Using MCP tools in an Agent
 
