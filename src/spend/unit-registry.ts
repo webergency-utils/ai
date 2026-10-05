@@ -28,6 +28,10 @@ export const DEFAULT_UNIT_PRICING: Record<string, number> =
         'storage:cache_write'      : 0.000002,
         'storage:file_transfer_mb' : 0.00002,
         'storage:bytes'            : 0.00000000002,
+        // Declared free class for in-memory backends (KTD4) — not an unpriced gap.
+        'storage:memory'           : 0,
+        'storage:memory:bytes'     : 0,
+        'storage:memory:operations': 0,
         'compute:sandbox_sec'      : 0.00005,
         'compute:seconds'          : 0.00005,
         'compute:durationMs'       : 0.00000005,
@@ -35,6 +39,22 @@ export const DEFAULT_UNIT_PRICING: Record<string, number> =
         'network:egress_mb'        : 0.00009,
         'mcp:call'                 : 0.0005,
         'tools:call'               : 0.0001
+    };
+
+/** Explicit free rates for in-memory storage (KTD4). */
+export const MEMORY_FREE_UNIT_PRICING: Record<string, number> = 
+    {
+        'storage:memory'            : 0,
+        'storage:memory:bytes'      : 0,
+        'storage:memory:operations' : 0,
+        'storage:vector_query'      : 0,
+        'storage:vector_write'      : 0,
+        'storage:doc_read'          : 0,
+        'storage:doc_write'         : 0,
+        'storage:cache_read'        : 0,
+        'storage:cache_write'       : 0,
+        'storage:file_transfer_mb'  : 0,
+        'storage:bytes'             : 0
     };
 
 

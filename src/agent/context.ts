@@ -57,14 +57,21 @@ export class SimpleExecutionContext implements ExecutionContext
 
     public reportSpend( entry: CategorySpendInput ): void
     {
+        const resolved: CategorySpendInput = { ...entry };
+
+        if( resolved.costUSD === undefined && this.#tracker )
+        {
+            resolved.costUSD = this.#tracker.resolveCategoryCost( resolved );
+        }
+
         if( this.activeSpan )
         {
-            this.activeSpan.recordSpend( entry );
+            this.activeSpan.recordSpend( resolved );
         }
 
         if( this.#tracker )
         {
-            this.#tracker.recordCategorySpend( entry, 
+            this.#tracker.recordCategorySpend( resolved, 
                 {
                     threadId : this.threadId,
                     agentId  : this.agentId
@@ -73,7 +80,7 @@ export class SimpleExecutionContext implements ExecutionContext
 
         if( this.#onSpend )
         {
-            this.#onSpend( entry );
+            this.#onSpend( resolved );
         }
     }
 

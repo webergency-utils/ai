@@ -8,6 +8,7 @@ import type { JITToolRetriever } from './jit-retriever.js';
 import { SimpleExecutionContext, type ExecutionContext } from './context.js';
 import type { Span } from '../trace/types.js';
 import type { TraceCollector } from '../trace/collector.js';
+import { createMeteredModel } from '../providers/metered.js';
 
 export interface AgentConfig
 {
@@ -157,10 +158,22 @@ export class Agent
                                     modelSpan.setAttribute( 'model.provider', this.#model.provider );
                                     modelSpan.setAttribute( 'model.name', this.#model.model );
 
-                                    const resp = await this.#model.generate( {
+                                    const model = this.#spendTracker 
+                                        ? createMeteredModel( this.#model, {
+                                            tracker : this.#spendTracker,
+                                            getSpan : () => {return modelSpan;},
+                                            threadId,
+                                            agentId
+                                        } )
+                                        : this.#model;
+
+                                    const prevModelSpend = this.#spendTracker?.getCategorySpend( 'model' ) ?? 0;
+
+                                    const resp = await model.generate( {
                                         messages,
                                         systemPrompt : this.#instructions,
-                                        tools        : toolDefs.length > 0 ? toolDefs : undefined
+                                        tools        : toolDefs.length > 0 ? toolDefs : undefined,
+                                        signal       : options.signal
                                     } );
 
                                     if( resp.usage )
@@ -170,19 +183,12 @@ export class Agent
                                             completionTokens : resp.usage.completionTokens,
                                             totalTokens      : resp.usage.totalTokens
                                         } );
+                                    }
 
-                                        if( this.#spendTracker )
-                                        {
-                                            const spend = this.#spendTracker.record( this.#model.model, resp.usage );
-                                            totalSpendUSD += spend.totalCost;
-                                            modelSpan.recordSpend( {
-                                                category    : 'model',
-                                                subcategory : this.#model.model,
-                                                costUSD     : spend.totalCost,
-                                                units       : resp.usage.totalTokens,
-                                                unitType    : 'tokens'
-                                            } );
-                                        }
+                                    if( this.#spendTracker )
+                                    {
+                                        const nextModelSpend = this.#spendTracker.getCategorySpend( 'model' );
+                                        totalSpendUSD += Math.max( 0, nextModelSpend - prevModelSpend );
                                     }
 
                                     return resp;

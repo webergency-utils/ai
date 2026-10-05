@@ -5,7 +5,6 @@ import
     UnitCostRegistry,
     type SpendWarningEvent
 } from '../../src/spend/index.js';
-import { BudgetExceededError } from '../../src/core/error.js';
 
 describe( 'SpendTracker Multi-Category & Budget Enforcement', () => 
 {
@@ -48,13 +47,19 @@ describe( 'SpendTracker Multi-Category & Budget Enforcement', () =>
         expect( breakdown.compute ).toBe( 0.005 );
     } );
 
-    it( 'should enforce category-specific budget ceilings (AE3)', () => 
+    it( 'should warn when category-specific budget ceilings are crossed (R48/R49)', () => 
     {
         const tracker = new SpendTracker( {
             maxBudgetUSD    : 10.00,
             categoryBudgets : {
                 compute : 1.00
             }
+        } );
+        const warnings: Array<{ code: string, category: string }> = [];
+
+        tracker.on( 'warning', ( e ) => 
+        {
+            warnings.push( e );
         } );
 
         // Storage spend under total limit
@@ -73,27 +78,17 @@ describe( 'SpendTracker Multi-Category & Budget Enforcement', () =>
 
         expect( tracker.totalSpendUSD ).toBe( 2.80 );
 
-        // Exceeding compute category ceiling ($1.00) even though total ($3.05) is well under $10.00
-        let thrownError: unknown;
+        // Crossing compute category ceiling — warn, do not throw
+        tracker.recordCategorySpend( {
+            category : 'compute',
+            costUSD  : 0.25
+        } );
 
-        try
+        expect( tracker.getCategorySpend( 'compute' ) ).toBe( 1.05 );
+        expect( warnings.some( ( w ) => 
         {
-            tracker.recordCategorySpend( {
-                category : 'compute',
-                costUSD  : 0.25
-            } );
-        }
-        catch( err: unknown )
-        {
-            thrownError = err;
-        }
-
-        expect( thrownError ).toBeInstanceOf( BudgetExceededError );
-        const budgetErr = thrownError as BudgetExceededError;
-
-        expect( budgetErr.category ).toBe( 'compute' );
-        expect( budgetErr.budgetLimitUSD ).toBe( 1.00 );
-        expect( budgetErr.currentSpendUSD ).toBe( 1.05 );
+            return w.code === 'budget_exceeded' && w.category === 'compute';
+        } ) ).toBe( true );
     } );
 
 

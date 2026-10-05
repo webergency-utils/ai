@@ -1,8 +1,8 @@
 import type { UsageMetrics } from '../core/types.js';
-import { BudgetExceededError } from '../core/error.js';
+import { BudgetRefusedError } from '../core/error.js';
 import type { WarningEvent } from '../core/warning.js';
-import type { ModelPricing } from './pricing.js';
-import { type SpendDetails, SpendCalculator, defaultSpendCalculator } from './calculator.js';
+import type { ModelPricing, PricingIdentity } from './pricing.js';
+import { type SpendDetails, SpendCalculator, defaultSpendCalculator, type CalculateSpendOptions } from './calculator.js';
 import 
 { 
     type SpendCategory, 
@@ -23,7 +23,7 @@ export interface SpendTrackerOptions
 
 export interface SpendWarningEvent extends WarningEvent
 {
-    code         : 'budget_threshold' | 'unpriced_usage' | 'budget_exceeded' | string
+    code         : 'budget_threshold' | 'unpriced_usage' | 'budget_exceeded' | 'spend_gap' | string
     category     : SpendCategory | 'total'
     currentSpend : number
     budgetLimit  : number
@@ -34,6 +34,12 @@ export interface SpendWarningEvent extends WarningEvent
 export type SpendWarningListener = ( event: SpendWarningEvent ) => void;
 
 export interface CategorySpendOptions
+{
+    threadId? : string
+    agentId?  : string
+}
+
+export interface RecordModelOptions extends CalculateSpendOptions
 {
     threadId? : string
     agentId?  : string
@@ -90,6 +96,21 @@ export class SpendTracker
         };
     }
 
+    public get calculator(): SpendCalculator
+    {
+        return this.#calculator;
+    }
+
+    public get unitRegistry(): UnitCostRegistry
+    {
+        return this.#unitRegistry;
+    }
+
+    public get modelBudgetUSD(): number | undefined
+    {
+        return this.#categoryBudgets?.model;
+    }
+
     public getCategorySpend( category: SpendCategory ): number
     {
         return this.#categorySpend.get( category ) ?? 0;
@@ -107,13 +128,90 @@ export class SpendTracker
         this.#warningListeners.delete( listener );
     }
 
+    /**
+     * Pre-flight for model calls (R31, R32, R48, R49).
+     * Only model-category budgets refuse; storage/tools are never refused here.
+     */
+    public assertModelCallAllowed( identity: PricingIdentity ): void
+    {
+        const modelBudget = this.#categoryBudgets?.model;
+        const resolution = this.#calculator.resolvePricing( identity );
+
+        if( modelBudget !== undefined && modelBudget > 0 )
+        {
+            if( resolution.status === 'unpriced' )
+            {
+                throw new BudgetRefusedError( 
+                    'unpriced', 
+                    `Model budget cannot be enforced for unpriced model '${identity.provider}:${identity.model}'`, 
+                    { provider : identity.provider, model : identity.model } 
+                );
+            }
+
+            const modelSpend = this.#categorySpend.get( 'model' ) ?? 0;
+
+            if( modelSpend >= modelBudget )
+            {
+                throw new BudgetRefusedError( 
+                    'exhausted', 
+                    `Model budget exhausted: current spend $${modelSpend.toFixed( 4 )} meets or exceeds limit $${modelBudget.toFixed( 4 )}`, 
+                    { provider : identity.provider, model : identity.model } 
+                );
+            }
+        }
+    }
+
     public record( 
         model: string, 
         usage: UsageMetrics, 
-        customPricing?: ModelPricing 
+        customPricingOrOptions?: ModelPricing | RecordModelOptions,
+        maybeOptions?: RecordModelOptions 
     ): SpendDetails
     {
-        const details = this.#calculator.calculate( model, usage, customPricing );
+        let customPricing: ModelPricing | undefined;
+        let options: RecordModelOptions | undefined;
+
+        if( customPricingOrOptions && this.#isModelPricing( customPricingOrOptions ) )
+        {
+            customPricing = customPricingOrOptions;
+            options = maybeOptions;
+        }
+        else
+        {
+            options = customPricingOrOptions as RecordModelOptions | undefined;
+            customPricing = options?.customPricing;
+        }
+
+        const details = this.#calculator.calculate( model, usage, customPricing, options );
+
+        if( details.unpriced )
+        {
+            this.#emitWarning( {
+                code         : 'unpriced_usage',
+                message      : `Usage for model '${model}' is unpriced; recorded as a spend gap, not $0 cost`,
+                category     : 'model',
+                currentSpend : this.#categorySpend.get( 'model' ) ?? 0,
+                budgetLimit  : this.#categoryBudgets?.model ?? 0,
+                threshold    : this.#warningThreshold,
+                percentage   : 0,
+                details      : { provider : options?.provider, model, pricingStatus : 'unpriced' }
+            } );
+        }
+
+        if( details.gaps && details.gaps.length > 0 )
+        {
+            this.#emitWarning( {
+                code         : 'spend_gap',
+                message      : `Spend gaps for model '${model}': ${details.gaps.join( ', ' )}`,
+                category     : 'model',
+                currentSpend : this.#categorySpend.get( 'model' ) ?? 0,
+                budgetLimit  : this.#categoryBudgets?.model ?? 0,
+                threshold    : this.#warningThreshold,
+                percentage   : 0,
+                details      : { gaps : details.gaps }
+            } );
+        }
+
         const prevTotal = this.#totalSpendUSD;
         const newTotal = prevTotal + details.totalCost;
         const prevCat = this.#categorySpend.get( 'model' ) ?? 0;
@@ -123,9 +221,31 @@ export class SpendTracker
         this.#categorySpend.set( 'model', newCat );
         this.#records.push( details );
 
+        // Crossing a budget warns; record never throws (R32, R49).
         this.#checkWarningsAndLimits( prevTotal, newTotal, 'model', prevCat, newCat );
 
         return details;
+    }
+
+    /**
+     * Record a usage-missing / abandoned-attempt gap (R2, R57, R59).
+     */
+    public recordSpendGap( 
+        message: string, 
+        details?: Record<string, unknown>,
+        options?: CategorySpendOptions 
+    ): void
+    {
+        this.#emitWarning( {
+            code         : 'spend_gap',
+            message,
+            category     : 'model',
+            currentSpend : this.#categorySpend.get( 'model' ) ?? 0,
+            budgetLimit  : this.#categoryBudgets?.model ?? 0,
+            threshold    : this.#warningThreshold,
+            percentage   : 0,
+            details      : { ...details, threadId : options?.threadId, agentId : options?.agentId }
+        } );
     }
 
     public recordCategorySpend( 
@@ -163,6 +283,16 @@ export class SpendTracker
         this.#checkWarningsAndLimits( prevTotal, newTotal, entry.category, prevCat, newCat );
 
         return record;
+    }
+
+    public resolveCategoryCost( entry: CategorySpendInput ): number
+    {
+        if( entry.costUSD !== undefined )
+        {
+            return entry.costUSD;
+        }
+
+        return this.#unitRegistry.resolveCost( entry );
     }
 
     public getThreadTracker( 
@@ -215,6 +345,16 @@ export class SpendTracker
         this.#subTrackers.clear();
     }
 
+    #isModelPricing( value: unknown ): value is ModelPricing
+    {
+        return Boolean( 
+            value 
+            && typeof value === 'object' 
+            && 'inputPerMillion' in value 
+            && 'outputPerMillion' in value 
+        );
+    }
+
     #emitWarning( event: SpendWarningEvent ): void
     {
         for( const listener of this.#warningListeners )
@@ -237,7 +377,7 @@ export class SpendTracker
         {
             const warnCap = catLimit * this.#warningThreshold;
 
-            if( prevCat < warnCap && newCat >= warnCap )
+            if( prevCat < warnCap && newCat >= warnCap && newCat <= catLimit )
             {
                 this.#emitWarning( {
                     code         : 'budget_threshold',
@@ -250,9 +390,17 @@ export class SpendTracker
                 } );
             }
 
-            if( newCat > catLimit )
+            if( prevCat <= catLimit && newCat > catLimit )
             {
-                throw new BudgetExceededError( newCat, catLimit, category );
+                this.#emitWarning( {
+                    code         : 'budget_exceeded',
+                    message      : `Category '${category}' budget exceeded: $${newCat.toFixed( 4 )} > $${catLimit.toFixed( 4 )}`,
+                    category,
+                    currentSpend : newCat,
+                    budgetLimit  : catLimit,
+                    threshold    : 1,
+                    percentage   : ( newCat / catLimit ) * 100
+                } );
             }
         }
 
@@ -260,7 +408,7 @@ export class SpendTracker
         {
             const warnCap = this.#maxBudgetUSD * this.#warningThreshold;
 
-            if( prevTotal < warnCap && newTotal >= warnCap )
+            if( prevTotal < warnCap && newTotal >= warnCap && newTotal <= this.#maxBudgetUSD )
             {
                 this.#emitWarning( {
                     code         : 'budget_threshold',
@@ -273,9 +421,17 @@ export class SpendTracker
                 } );
             }
 
-            if( newTotal > this.#maxBudgetUSD )
+            if( prevTotal <= this.#maxBudgetUSD && newTotal > this.#maxBudgetUSD )
             {
-                throw new BudgetExceededError( newTotal, this.#maxBudgetUSD );
+                this.#emitWarning( {
+                    code         : 'budget_exceeded',
+                    message      : `Total budget exceeded: $${newTotal.toFixed( 4 )} > $${this.#maxBudgetUSD.toFixed( 4 )}`,
+                    category     : 'total',
+                    currentSpend : newTotal,
+                    budgetLimit  : this.#maxBudgetUSD,
+                    threshold    : 1,
+                    percentage   : ( newTotal / this.#maxBudgetUSD ) * 100
+                } );
             }
         }
     }

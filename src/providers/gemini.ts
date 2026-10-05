@@ -43,6 +43,7 @@ interface RawGeminiUsage
     candidatesTokenCount?: number
     totalTokenCount?: number
     cachedContentTokenCount?: number
+    thoughtsTokenCount?: number
     [key: string]: unknown
 }
 
@@ -435,11 +436,13 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
         const promptTokens = rawUsage.promptTokenCount ?? 0;
         const completionTokens = rawUsage.candidatesTokenCount ?? 0;
         const totalTokens = rawUsage.totalTokenCount ?? ( promptTokens + completionTokens );
+        const thoughts = Number( rawUsage.thoughtsTokenCount ?? 0 );
 
         return {
             promptTokens,
             completionTokens,
             totalTokens,
+            reasoningTokens        : Number.isFinite( thoughts ) && thoughts > 0 ? thoughts : undefined,
             cachedPromptReadTokens : rawUsage.cachedContentTokenCount,
             raw                    : rawUsage
         };

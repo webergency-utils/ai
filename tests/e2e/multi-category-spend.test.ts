@@ -149,14 +149,20 @@ describe( 'E2E Multi-Category Spend & Telemetry Pipeline', () =>
         expect( result.categorySpend?.tools ).toBe( 0.005 );
     } );
 
-    it( 'should enforce category budget ceilings during agent execution', async () => 
+    it( 'should warn when tool spend crosses a category budget without refusing (R48)', async () => 
     {
-        // Category ceiling of $0.003 for tools
+        // Category ceiling of $0.003 for tools — tools are warned, never refused.
         const tracker = new SpendTracker( {
             maxBudgetUSD    : 10.00,
             categoryBudgets : {
                 tools : 0.003
             }
+        } );
+        const warnings: Array<{ code: string, category: string }> = [];
+
+        tracker.on( 'warning', ( e ) => 
+        {
+            warnings.push( e );
         } );
 
         const paidApiTool = createTool( {
@@ -188,6 +194,11 @@ describe( 'E2E Multi-Category Spend & Telemetry Pipeline', () =>
                         role         : 'assistant',
                         content      : 'Calling paid API...',
                         finishReason : 'tool_calls',
+                        usage        : {
+                            promptTokens     : 10,
+                            completionTokens : 5,
+                            totalTokens      : 15
+                        },
                         toolCalls : 
                         [
                             {
@@ -209,12 +220,14 @@ describe( 'E2E Multi-Category Spend & Telemetry Pipeline', () =>
 
         const result = await agent.run( 'Execute paid API' );
 
-        // Tool execution caught the error and reported it in tool result message
         const toolMsg = result.messages.find( ( m ) => {return m.role === 'tool';} );
 
         expect( toolMsg ).toBeDefined();
-        expect( toolMsg!.content ).toContain( 'budget cap exceeded' );
-        expect( toolMsg!.content ).toContain( 'tools' );
-
+        expect( toolMsg!.content ).toContain( 'success' );
+        expect( tracker.getCategorySpend( 'tools' ) ).toBe( 0.005 );
+        expect( warnings.some( ( w ) => 
+        {
+            return w.code === 'budget_exceeded' && w.category === 'tools';
+        } ) ).toBe( true );
     } );
 } );

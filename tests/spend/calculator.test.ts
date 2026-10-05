@@ -5,7 +5,6 @@ import {
     PricingRegistry, 
     SpendTracker 
 } from '../../src/spend/index.js';
-import { BudgetExceededError } from '../../src/core/error.js';
 import type { UsageMetrics } from '../../src/core/types.js';
 
 describe( 'Spend Calculator & Pricing Engine', () => 
@@ -111,9 +110,15 @@ describe( 'Spend Calculator & Pricing Engine', () =>
         expect( res.totalCost ).toBe( 30.00 );
     } );
 
-    it( 'should track accumulated spend and enforce budget caps', () => 
+    it( 'should track accumulated spend and warn when budget is crossed (R49)', () => 
     {
         const tracker = new SpendTracker( { maxBudgetUSD : 0.01 } );
+        const warnings: Array<{ code: string }> = [];
+
+        tracker.on( 'warning', ( e ) => 
+        {
+            warnings.push( e );
+        } );
 
         const call1 = tracker.record( 'gpt-4o-mini', 
             {
@@ -125,16 +130,17 @@ describe( 'Spend Calculator & Pricing Engine', () =>
         expect( tracker.totalSpendUSD ).toBeCloseTo( call1.totalCost, 6 );
         expect( tracker.records ).toHaveLength( 1 );
 
-        // Exceed budget cap ($0.01)
-        expect( () => 
-        {
-            tracker.record( 'gpt-4o', 
-                {
-                    promptTokens     : 100_000,
-                    completionTokens : 50_000,
-                    totalTokens      : 150_000
-                } );
-        } ).toThrow( BudgetExceededError );
+        // Crossing the cap records spend and warns — does not throw (R32/R49).
+        const call2 = tracker.record( 'gpt-4o', 
+            {
+                promptTokens     : 100_000,
+                completionTokens : 50_000,
+                totalTokens      : 150_000
+            } );
+
+        expect( call2.totalCost ).toBeGreaterThan( 0 );
+        expect( tracker.totalSpendUSD ).toBeGreaterThan( 0.01 );
+        expect( warnings.some( ( w ) => {return w.code === 'budget_exceeded';} ) ).toBe( true );
     } );
 
     it( 'should manage isolated thread trackers', () => 

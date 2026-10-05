@@ -8,3 +8,4 @@ export * from './deepseek.js';
 export * from './mistral.js';
 export * from './registry.js';
 export * from './sdk-bridge.js';
+export * from './metered.js';
