@@ -71,4 +71,6 @@ export interface MCPTransport
     send( message: JSONRPCMessage ): Promise<void>
     close(): Promise<void>
     onMessage( handler: ( message: JSONRPCMessage ) => void ): void
+    /** Optional: fire when the underlying connection dies (R58). */
+    onClose?( handler: () => void ): void
 }

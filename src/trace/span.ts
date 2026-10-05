@@ -118,6 +118,12 @@ export class SpanImpl implements Span
 
     public end( endTime?: number ): void
     {
+        // Idempotent: keep the first end time (R39).
+        if( this.endTime !== undefined )
+        {
+            return;
+        }
+
         this.endTime = endTime ?? Date.now();
         this.durationMs = Math.max( 0, this.endTime - this.startTime );
     }

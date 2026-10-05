@@ -104,6 +104,17 @@ describe( 'SpanImpl', () =>
         expect( span.durationMs ).toBe( 50 );
     } );
 
+    it( 'keeps the first end time when end is called twice (R39)', () => 
+    {
+        const span = new SpanImpl( 'idempotent-end', { startTime : 1_000 } );
+
+        span.end( 1_050 );
+        span.end( 9_999 );
+
+        expect( span.endTime ).toBe( 1_050 );
+        expect( span.durationMs ).toBe( 50 );
+    } );
+
     it( 'serializes to plain JSON structure with children', () => 
     {
         const parent = new SpanImpl( 'parent', { kind : 'agent' } );

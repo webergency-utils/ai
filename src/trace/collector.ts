@@ -15,7 +15,9 @@ import type {
 
 export interface TraceCollectorOptions
 {
-    maxTraces? : number
+    maxTraces?       : number
+    /** Bound on in-progress traces; overflow drops the oldest active and warns (R38). */
+    maxActiveTraces? : number
 }
 
 export interface StartTraceOptions
@@ -32,6 +34,7 @@ export interface StartTraceOptions
 export class TraceCollector extends EventEmitter
 {
     readonly #maxTraces: number;
+    readonly #maxActiveTraces: number;
     readonly #completedTraces = new Map<string, Trace>();
     readonly #activeTraces = new Map<string, Trace>();
 
@@ -39,6 +42,7 @@ export class TraceCollector extends EventEmitter
     {
         super();
         this.#maxTraces = options.maxTraces ?? 1000;
+        this.#maxActiveTraces = options.maxActiveTraces ?? options.maxTraces ?? 1000;
     }
 
     public override on<E extends keyof TraceEvents>( event: E, listener: TraceEvents[E] ): this
@@ -148,6 +152,7 @@ export class TraceCollector extends EventEmitter
             };
 
         this.#activeTraces.set( trace.traceId, trace );
+        this.#enforceActiveBound( trace.traceId );
 
         const context = new SimpleExecutionContext( 
             {
@@ -185,10 +190,41 @@ export class TraceCollector extends EventEmitter
                 };
 
             this.#activeTraces.set( trace.traceId, trace );
+            this.#enforceActiveBound( trace.traceId );
             this.emit( 'trace:start', trace );
         }
 
         this.emit( 'span:start', span );
+    }
+
+    #enforceActiveBound( justAddedId: string ): void
+    {
+        while( this.#activeTraces.size > this.#maxActiveTraces )
+        {
+            let dropId: string | undefined;
+
+            for( const id of this.#activeTraces.keys() )
+            {
+                if( id !== justAddedId )
+                {
+                    dropId = id;
+                    break;
+                }
+            }
+
+            if( !dropId )
+            {
+                break;
+            }
+
+            const dropped = this.#activeTraces.get( dropId )!;
+            this.#activeTraces.delete( dropId );
+            this.emit( 'warning', {
+                code    : 'active_trace_overflow',
+                message : `Dropped oldest in-progress trace '${dropId}' after exceeding maxActiveTraces=${this.#maxActiveTraces}`,
+                details : { traceId : dropId, startTime : dropped.startTime }
+            } );
+        }
     }
 
     public recordSpanEnd( span: Span ): void

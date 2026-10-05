@@ -9,6 +9,7 @@ import type {
 } from './types.js';
 import { SimpleExecutionContext, type ExecutionContext } from '../agent/context.js';
 import { SpanImpl } from '../trace/span.js';
+import type { SpendTracker } from '../spend/tracker.js';
 
 export type ToolHandler = ( args: Record<string, unknown>, context?: ExecutionContext ) => Promise<unknown>;
 
@@ -16,20 +17,24 @@ export type ToolHandler = ( args: Record<string, unknown>, context?: ExecutionCo
 
 export interface MCPServerOptions
 {
-    name?    : string
-    version? : string
+    name?     : string
+    version?  : string
+    /** Spend tracker for tool handlers when no per-call context is supplied (R30). */
+    tracker?  : SpendTracker
 }
 
 export class MCPServer
 {
     readonly #name: string;
     readonly #version: string;
+    readonly #tracker?: SpendTracker;
     readonly #tools = new Map<string, { definition: ToolDefinition, handler: ToolHandler }>();
 
     constructor( options: MCPServerOptions = {} )
     {
         this.#name = options.name ?? '@webergency-utils/ai';
         this.#version = options.version ?? '0.1.0';
+        this.#tracker = options.tracker;
     }
 
     public registerTool( tool: ToolDefinition, handler: ToolHandler ): void
@@ -41,7 +46,10 @@ export class MCPServer
     {
         transport.onMessage( async ( message ) => 
         {
-            const response = await this.handleMessage( message );
+            const defaultContext = this.#tracker
+                ? new SimpleExecutionContext( { tracker : this.#tracker } )
+                : undefined;
+            const response = await this.handleMessage( message, defaultContext );
 
             if( response )
             {
@@ -122,7 +130,11 @@ export class MCPServer
                 }
 
                 const meta = req.params?._meta as { traceId?: string, parentSpanId?: string } | undefined;
-                let handlerContext = context;
+                let handlerContext = context ?? (
+                    this.#tracker
+                        ? new SimpleExecutionContext( { tracker : this.#tracker } )
+                        : undefined
+                );
                 let serverToolSpan: SpanImpl | undefined;
 
                 if( meta?.traceId )
@@ -134,13 +146,22 @@ export class MCPServer
                             kind         : 'tool'
                         } );
 
-                    handlerContext = new SimpleExecutionContext( 
-                        {
+                    if( context )
+                    {
+                        handlerContext = context.child( {
                             traceId    : meta.traceId,
-                            activeSpan : serverToolSpan,
-                            threadId   : context?.threadId,
-                            agentId    : context?.agentId
+                            activeSpan : serverToolSpan
                         } );
+                    }
+                    else
+                    {
+                        handlerContext = new SimpleExecutionContext( 
+                            {
+                                traceId    : meta.traceId,
+                                activeSpan : serverToolSpan,
+                                tracker    : this.#tracker
+                            } );
+                    }
                 }
 
                 try

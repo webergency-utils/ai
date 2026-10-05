@@ -23,6 +23,7 @@ export class InMemoryTransport implements MCPTransport
 {
     #peer?: InMemoryTransport;
     #handler?: ( message: JSONRPCMessage ) => void;
+    #closeHandler?: () => void;
     readonly #queue: JSONRPCMessage[] = [];
     #connected = false;
 
@@ -66,8 +67,27 @@ export class InMemoryTransport implements MCPTransport
 
     public async close(): Promise<void>
     {
+        if( !this.#connected )
+        {
+            return;
+        }
+
         this.#connected = false;
         this.#queue.length = 0;
+        this.#closeHandler?.();
+    }
+
+    /** Simulate peer/transport death without going through close() (R58 tests). */
+    public simulateDeath(): void
+    {
+        if( !this.#connected )
+        {
+            return;
+        }
+
+        this.#connected = false;
+        this.#queue.length = 0;
+        this.#closeHandler?.();
     }
 
     public onMessage( handler: ( message: JSONRPCMessage ) => void ): void
@@ -82,6 +102,11 @@ export class InMemoryTransport implements MCPTransport
                 handler( msg );
             }
         }
+    }
+
+    public onClose( handler: () => void ): void
+    {
+        this.#closeHandler = handler;
     }
 
     public static createPair(): [ InMemoryTransport, InMemoryTransport ]
@@ -102,6 +127,7 @@ export class StdioTransport implements MCPTransport
     readonly #env?: Record<string, string>;
     #process?: ChildProcess;
     #handler?: ( message: JSONRPCMessage ) => void;
+    #closeHandler?: () => void;
     readonly #textDecoder = new TextDecoder();
     readonly #ndjson = createNDJSONDecoder();
 
@@ -156,6 +182,12 @@ export class StdioTransport implements MCPTransport
 
             this.#dispatchLines( this.#ndjson.flush() );
         } );
+
+        this.#process.on( 'exit', () => 
+        {
+            this.#process = undefined;
+            this.#closeHandler?.();
+        } );
     }
 
     public async send( message: JSONRPCMessage ): Promise<void>
@@ -173,14 +205,22 @@ export class StdioTransport implements MCPTransport
     {
         if( this.#process )
         {
-            this.#process.kill();
+            const proc = this.#process;
             this.#process = undefined;
+            proc.removeAllListeners( 'exit' );
+            proc.kill();
+            this.#closeHandler?.();
         }
     }
 
     public onMessage( handler: ( message: JSONRPCMessage ) => void ): void
     {
         this.#handler = handler;
+    }
+
+    public onClose( handler: () => void ): void
+    {
+        this.#closeHandler = handler;
     }
 }
 
@@ -189,6 +229,7 @@ export class SSETransport implements MCPTransport
     readonly #endpointUrl: string;
     #postUrl?: string;
     #handler?: ( message: JSONRPCMessage ) => void;
+    #closeHandler?: () => void;
     #abortController?: AbortController;
 
     constructor( endpointUrl: string )
@@ -239,16 +280,25 @@ export class SSETransport implements MCPTransport
 
     public async close(): Promise<void>
     {
-        if( this.#abortController )
+        if( !this.#abortController )
         {
-            this.#abortController.abort();
-            this.#abortController = undefined;
+            return;
         }
+
+        const controller = this.#abortController;
+        this.#abortController = undefined;
+        controller.abort();
+        this.#closeHandler?.();
     }
 
     public onMessage( handler: ( message: JSONRPCMessage ) => void ): void
     {
         this.#handler = handler;
+    }
+
+    public onClose( handler: () => void ): void
+    {
+        this.#closeHandler = handler;
     }
 
     private async listenStream( stream: ReadableStream<Uint8Array> ): Promise<void>
@@ -285,36 +335,58 @@ export class SSETransport implements MCPTransport
         {
             // Stream closed
         }
+        finally
+        {
+            if( this.#abortController )
+            {
+                this.#abortController = undefined;
+                this.#closeHandler?.();
+            }
+        }
     }
 }
 
 export interface MCPClientOptions
 {
-    tracker? : SpendTracker
+    tracker?    : SpendTracker
+    /** Per-request timeout in ms (default 60_000). */
+    timeoutMs?  : number
 }
 
 export interface MCPCallOptions
 {
-    context? : ExecutionContext
+    context?   : ExecutionContext
+    signal?    : AbortSignal
+    timeoutMs? : number
 }
 
 export class MCPClient
 {
     readonly #transport       : MCPTransport;
     readonly #tracker?        : SpendTracker;
+    readonly #timeoutMs       : number;
     readonly #pendingRequests = new Map<string | number, {
         resolve: ( res: JSONRPCResponse ) => void
         reject: ( err: Error ) => void
+        method: string
+        timer?: ReturnType<typeof setTimeout>
     }>();
     #requestIdCounter = 1;
+    #closed = false;
 
     constructor( transport: MCPTransport, options: MCPClientOptions = {} )
     {
         this.#transport = transport;
         this.#tracker = options.tracker;
+        this.#timeoutMs = options.timeoutMs ?? 60_000;
         this.#transport.onMessage( ( msg ) => 
         {
             this.handleIncoming( msg );
+        } );
+
+        this.#transport.onClose?.( () => 
+        {
+            this.#rejectAllPending( new AIError( 'MCP transport closed', 'MCP_TRANSPORT_CLOSED' ) );
         } );
     }
 
@@ -398,7 +470,10 @@ export class MCPClient
 
         try
         {
-            res = await this.request( 'tools/call', reqPayload );
+            res = await this.request( 'tools/call', reqPayload, {
+                signal    : options?.signal,
+                timeoutMs : options?.timeoutMs
+            } );
         }
         catch( err: unknown )
         {
@@ -497,11 +572,22 @@ export class MCPClient
 
     public async close(): Promise<void>
     {
+        this.#closed = true;
+        this.#rejectAllPending( new AIError( 'MCP client closed', 'MCP_CLIENT_CLOSED' ) );
         await this.#transport.close();
     }
 
-    private async request( method: string, params?: Record<string, unknown> ): Promise<JSONRPCResponse>
+    private async request( 
+        method: string, 
+        params?: Record<string, unknown>,
+        options: { signal?: AbortSignal, timeoutMs?: number } = {}
+    ): Promise<JSONRPCResponse>
     {
+        if( this.#closed )
+        {
+            throw new AIError( 'MCP client closed', 'MCP_CLIENT_CLOSED' );
+        }
+
         const id = this.#requestIdCounter++;
         const req: JSONRPCRequest = 
             {
@@ -511,16 +597,126 @@ export class MCPClient
                 params
             };
 
+        const timeoutMs = options.timeoutMs ?? this.#timeoutMs;
+
         return new Promise<JSONRPCResponse>( ( resolve, reject ) => 
         {
-            this.#pendingRequests.set( id, { resolve, reject } );
+            let settled = false;
+            let onAbort: ( () => void ) | undefined;
 
-            this.#transport.send( req ).catch( ( err ) => 
+            const finish = ( res?: JSONRPCResponse, err?: Error ): void => 
             {
+                if( settled )
+                {
+                    return;
+                }
+
+                settled = true;
+                const pending = this.#pendingRequests.get( id );
+
+                if( pending?.timer )
+                {
+                    clearTimeout( pending.timer );
+                }
+
                 this.#pendingRequests.delete( id );
-                reject( err );
+
+                if( onAbort )
+                {
+                    options.signal?.removeEventListener( 'abort', onAbort );
+                }
+
+                if( err )
+                {
+                    reject( err );
+                }
+                else
+                {
+                    resolve( res! );
+                }
+            };
+
+            onAbort = (): void => 
+            {
+                void this.#sendCancelled( id, method );
+                finish( undefined, new AIError( `MCP request '${method}' aborted`, 'MCP_REQUEST_ABORTED', { id, method } ) );
+            };
+
+            if( options.signal?.aborted )
+            {
+                onAbort();
+
+                return;
+            }
+
+            const timer = timeoutMs > 0
+                ? setTimeout( () => 
+                {
+                    void this.#sendCancelled( id, method );
+                    finish( undefined, new AIError( 
+                        `MCP request '${method}' timed out after ${timeoutMs}ms`, 
+                        'MCP_REQUEST_TIMEOUT', 
+                        { id, method, timeoutMs } 
+                    ) );
+                }, timeoutMs )
+                : undefined;
+
+            this.#pendingRequests.set( id, {
+                resolve : ( res ) => { finish( res ); },
+                reject  : ( err ) => { finish( undefined, err ); },
+                method,
+                timer
+            } );
+
+            options.signal?.addEventListener( 'abort', onAbort, { once : true } );
+
+            this.#transport.send( req ).catch( ( err: unknown ) => 
+            {
+                finish( 
+                    undefined, 
+                    err instanceof Error ? err : new AIError( String( err ), 'MCP_TRANSPORT_ERROR' ) 
+                );
             } );
         } );
+    }
+
+    async #sendCancelled( id: string | number, method: string ): Promise<void>
+    {
+        // MCP spec: do not cancel initialize (R40).
+        if( method === 'initialize' )
+        {
+            return;
+        }
+
+        try
+        {
+            await this.#transport.send( {
+                jsonrpc : '2.0',
+                method  : 'notifications/cancelled',
+                params  : {
+                    requestId : id,
+                    reason    : 'client cancelled'
+                }
+            } );
+        }
+        catch
+        {
+            // Best-effort cancel notification
+        }
+    }
+
+    #rejectAllPending( err: Error ): void
+    {
+        for( const [ id, pending ] of this.#pendingRequests )
+        {
+            if( pending.timer )
+            {
+                clearTimeout( pending.timer );
+            }
+
+            this.#pendingRequests.delete( id );
+            pending.reject( err );
+        }
     }
 
     private handleIncoming( message: JSONRPCMessage ): void
@@ -531,7 +727,6 @@ export class MCPClient
 
             if( pending )
             {
-                this.#pendingRequests.delete( message.id );
                 pending.resolve( message as JSONRPCResponse );
             }
         }

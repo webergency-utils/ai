@@ -165,4 +165,25 @@ describe( 'TraceCollector & Real-Time Event Bus (U5)', () =>
         const limited = collector.listTraces( { limit : 2 } );
         expect( limited ).toHaveLength( 2 );
     } );
+
+    it( 'bounds in-progress traces and emits a warning on overflow (R38)', () => 
+    {
+        const collector = new TraceCollector( { maxActiveTraces : 2 } );
+        const warnings: Array<{ code: string, message: string }> = [];
+
+        collector.on( 'warning', ( event ) => 
+        {
+            warnings.push( event );
+        } );
+
+        const first = collector.startTrace( { name : 't1' } );
+        const second = collector.startTrace( { name : 't2' } );
+        const third = collector.startTrace( { name : 't3' } );
+
+        expect( warnings ).toHaveLength( 1 );
+        expect( warnings[ 0 ]?.code ).toBe( 'active_trace_overflow' );
+        expect( collector.getTrace( first.trace.traceId ) ).toBeUndefined();
+        expect( collector.getTrace( second.trace.traceId )?.traceId ).toBe( second.trace.traceId );
+        expect( collector.getTrace( third.trace.traceId )?.traceId ).toBe( third.trace.traceId );
+    } );
 } );
