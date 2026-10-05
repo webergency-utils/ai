@@ -1,6 +1,7 @@
 import { BaseProviderAdapter } from './base.js';
 import type { 
     ModelCapabilities,
+    CacheControl,
     ModelConfig, 
     ModelRequest, 
     ModelResponse, 
@@ -9,7 +10,7 @@ import type {
     UsageMetrics
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
-import { ProviderError } from '../core/error.js';
+import { InvalidInputError, ProviderError } from '../core/error.js';
 import { toAnthropicBlocks } from '../core/multimodal.js';
 import { parseToolArguments } from '../core/tool-stream.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
@@ -85,7 +86,7 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                     'Content-Type'      : 'application/json',
                     'x-api-key'         : apiKey,
                     'anthropic-version' : '2023-06-01',
-                    'anthropic-beta'    : 'prompt-caching-2024-07-31,output-128k-2025-02-19'
+                    'anthropic-beta'    : this.betaHeader( request )
                 },
                 body : JSON.stringify( payload )
             },
@@ -152,7 +153,7 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                     'Content-Type'      : 'application/json',
                     'x-api-key'         : apiKey,
                     'anthropic-version' : '2023-06-01',
-                    'anthropic-beta'    : 'prompt-caching-2024-07-31,output-128k-2025-02-19'
+                    'anthropic-beta'    : this.betaHeader( request )
                 },
                 body : JSON.stringify( payload )
             },
@@ -386,16 +387,25 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
         return payload;
     }
 
-    protected formatMessagesAndSystem( request: ModelRequest ): { system?: string, messages: Array<Record<string, unknown>> }
+    protected formatMessagesAndSystem( request: ModelRequest ): { 
+        system?  : string | Array<Record<string, unknown>>
+        messages : Array<Record<string, unknown>> 
+    }
     {
-        let system = request.systemPrompt ?? this.config.systemPrompt;
+        const systemParts: Array<{ text: string, cacheControl?: CacheControl }> = [];
+        const configSystem = request.systemPrompt ?? this.config.systemPrompt;
         const messages: Array<Record<string, unknown>> = [];
+
+        if( configSystem )
+        {
+            systemParts.push( { text : configSystem } );
+        }
 
         for( const msg of request.messages )
         {
             if( msg.role === 'system' )
             {
-                system = system ? `${system}\n\n${msg.content}` : msg.content;
+                systemParts.push( { text : msg.content, cacheControl : msg.cacheControl } );
                 continue;
             }
 
@@ -403,15 +413,17 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
             {
                 messages.push( 
                     {
-                        role : 'user',
-                        content : 
-                    [
-                        {
-                            type        : 'tool_result',
-                            tool_use_id : msg.toolCallId ?? '',
-                            content     : msg.content
-                        }
-                    ]
+                        role    : 'user',
+                        content : this.#withCacheControl( 
+                            [
+                                {
+                                    type        : 'tool_result',
+                                    tool_use_id : msg.toolCallId ?? '',
+                                    content     : msg.content
+                                }
+                            ], 
+                            msg.cacheControl 
+                        )
                     } );
                 continue;
             }
@@ -439,7 +451,10 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                     }
                 }
 
-                messages.push( { role : 'assistant', content : blocks.length > 0 ? blocks : '' } );
+                messages.push( { 
+                    role    : 'assistant', 
+                    content : blocks.length > 0 ? this.#withCacheControl( blocks, msg.cacheControl ) : '' 
+                } );
                 continue;
             }
 
@@ -447,15 +462,82 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
             {
                 messages.push( { 
                     role    : 'user', 
-                    content : toAnthropicBlocks( this.provider, msg.content, msg.attachments ) 
+                    content : this.#withCacheControl( 
+                        toAnthropicBlocks( this.provider, msg.content, msg.attachments ), 
+                        msg.cacheControl 
+                    ) 
                 } );
                 continue;
             }
 
-            messages.push( { role : 'user', content : msg.content } );
+            messages.push( { 
+                role    : 'user', 
+                content : msg.cacheControl 
+                    ? this.#withCacheControl( [ { type : 'text', text : msg.content } ], msg.cacheControl ) 
+                    : msg.content 
+            } );
         }
 
-        return { system, messages };
+        if( systemParts.length === 0 )
+        {
+            return { system : undefined, messages };
+        }
+
+        if( systemParts.some( ( part ) => {return part.cacheControl;} ) )
+        {
+            return {
+                system : systemParts.map( ( part ) => 
+                {
+                    return {
+                        type : 'text',
+                        text : part.text,
+                        ...( part.cacheControl ? { cache_control : this.#wireCacheControl( part.cacheControl ) } : {} )
+                    };
+                } ),
+                messages
+            };
+        }
+
+        return { system : systemParts.map( ( part ) => {return part.text;} ).join( '\n\n' ), messages };
+    }
+
+    #wireCacheControl( control: CacheControl ): Record<string, unknown>
+    {
+        return control.ttl ? { type : control.type, ttl : control.ttl } : { type : control.type };
+    }
+
+    /** Marks the last block of a message as a cache breakpoint. */
+    #withCacheControl( 
+        blocks: Array<Record<string, unknown>>, 
+        control?: CacheControl 
+    ): Array<Record<string, unknown>>
+    {
+        if( !control )
+        {
+            return blocks;
+        }
+
+        if( blocks.length === 0 )
+        {
+            throw new InvalidInputError( 'cacheControl cannot be applied to a message with no content blocks' );
+        }
+
+        const last = blocks[ blocks.length - 1 ];
+
+        return [ ...blocks.slice( 0, -1 ), { ...last, cache_control : this.#wireCacheControl( control ) } ];
+    }
+
+    /** Beta flags; the extended-TTL flag is only sent when a request uses `ttl`. */
+    protected betaHeader( request: ModelRequest ): string
+    {
+        const flags = [ 'prompt-caching-2024-07-31', 'output-128k-2025-02-19' ];
+
+        if( request.messages.some( ( msg ) => {return msg.cacheControl?.ttl;} ) )
+        {
+            flags.push( 'extended-cache-ttl-2025-04-11' );
+        }
+
+        return flags.join( ',' );
     }
 
     protected parseUsage( rawUsage?: RawAnthropicUsage ): UsageMetrics | undefined

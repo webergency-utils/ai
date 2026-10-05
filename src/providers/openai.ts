@@ -270,6 +270,11 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
             payload.top_p = this.config.topP;
         }
 
+        if( request.promptCacheKey )
+        {
+            payload.prompt_cache_key = request.promptCacheKey;
+        }
+
         if( request.tools && request.tools.length > 0 )
         {
             payload.tools = request.tools.map( ( tool ) => 
