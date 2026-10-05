@@ -1,4 +1,4 @@
-import type { ModelProtocol } from '../core/protocol.js';
+import type { LanguageModel } from '../core/protocol.js';
 import type { ChatMessage, ToolDefinition } from '../core/types.js';
 import type { SpendTracker } from '../spend/tracker.js';
 import type { CategorySpendBreakdown } from '../spend/types.js';
@@ -13,7 +13,7 @@ import { createMeteredModel } from '../providers/metered.js';
 
 export interface AgentConfig
 {
-    model              : ModelProtocol
+    model              : LanguageModel
     instructions?      : string
     tools?             : Tool[]
     maxIterations?     : number
@@ -80,7 +80,7 @@ function classifyToolError( err: unknown ): string
 
 export class Agent
 {
-    readonly #model             : ModelProtocol;
+    readonly #model             : LanguageModel;
     readonly #instructions?     : string;
     readonly #tools             : Tool[];
     readonly #maxIterations     : number;
@@ -413,7 +413,8 @@ export class Agent
                                     messages.push( {
                                         role      : 'assistant',
                                         content   : response.content,
-                                        toolCalls : response.toolCalls
+                                        toolCalls : response.toolCalls,
+                                        ...( response.reasoningContent !== undefined ? { reasoningContent : response.reasoningContent } : {} )
                                     } );
 
                                     pendingToolCalls = response.toolCalls.map( ( tc ) => 

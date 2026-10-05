@@ -1,7 +1,29 @@
 import type { IVectorStore, VectorRecord } from '../storage/vector.js';
 import type { Tool } from './tool.js';
+import type { EmbeddingOptions, EmbeddingProtocol } from '../core/embeddings.js';
+import { ProviderError } from '../core/error.js';
 
 export type EmbedderFn = ( text: string ) => Promise<number[]>;
+
+/**
+ * Adapts an {@link EmbeddingProtocol} to the retriever's `embedder` hook.
+ * Usage: `new JITToolRetriever( { vectorStore, embedder: createEmbedder( createEmbeddingModel( config ) ) } )`.
+ */
+export function createEmbedder( model: EmbeddingProtocol, options: EmbeddingOptions = {} ): EmbedderFn
+{
+    return async ( text: string ): Promise<number[]> =>
+    {
+        const response = await model.embed( text, options );
+        const vector = response.vectors[ 0 ];
+
+        if( !vector )
+        {
+            throw new ProviderError( model.provider, 'Embedding response contained no vector', 502 );
+        }
+
+        return vector;
+    };
+}
 
 export interface JITToolRetrieverOptions
 {

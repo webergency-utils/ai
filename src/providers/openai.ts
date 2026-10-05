@@ -1,5 +1,6 @@
 import { BaseProviderAdapter } from './base.js';
 import type { 
+    ModelCapabilities,
     ModelConfig, 
     ModelRequest, 
     ModelResponse, 
@@ -9,7 +10,10 @@ import type {
     UsageMetrics
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
+import { isStrictCompatible, resolveOutputMode, schemaInstruction } from '../core/structured-output.js';
 import { ProviderError } from '../core/error.js';
+import { assertAttachmentRole, toOpenAIParts } from '../core/multimodal.js';
+import { parseToolArguments } from '../core/tool-stream.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
 
 interface RawOpenAIToolCall
@@ -26,10 +30,14 @@ interface OpenAIChoice
 {
     message?: {
         content?: string | null
+        reasoning_content?: string | null
+        reasoning?: string | null
         tool_calls?: RawOpenAIToolCall[]
     }
     delta?: {
         content?: string
+        reasoning_content?: string | null
+        reasoning?: string | null
         tool_calls?: Array<{
             index?: number
             id?: string
@@ -77,8 +85,26 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
         return 'OPENAI_API_KEY';
     }
 
+    protected override get defaultCapabilities(): ModelCapabilities
+    {
+        return {
+            structuredOutput   : true,
+            embeddings         : true,
+            reasoningContent   : true,
+            promptCacheControl : true,
+            multimodal         : { image : true, audio : true, video : false, document : true }
+        };
+    }
+
+    protected override get supportsPromptCacheKey(): boolean
+    {
+        return true;
+    }
+
     public async generate( request: ModelRequest ): Promise<ModelResponse>
     {
+        this.assertRequestSupported( request );
+
         const apiKey = this.getApiKey( this.defaultEnvVar );
         const payload = this.buildPayload( request, false );
         const transport = this.resolveTransportOptions( request );
@@ -104,18 +130,28 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
         const usage = this.parseUsage( data.usage );
         const finishReason = this.mapFinishReason( choice?.finish_reason );
 
-        return {
-            content   : message?.content ?? '',
-            role      : 'assistant',
-            toolCalls : toolCalls.length > 0 ? toolCalls : undefined,
+        const reasoning = message?.reasoning_content ?? message?.reasoning;
+
+        return this.withStructured( request, {
+            content          : message?.content ?? '',
+            role             : 'assistant',
+            toolCalls        : toolCalls.length > 0 ? toolCalls : undefined,
+            reasoningContent : reasoning ? reasoning : undefined,
             usage,
             finishReason,
-            raw       : data
-        };
+            raw              : data
+        } );
     }
 
-    public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    public stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
     {
+        return this.finalizeChunks( request, this.streamChunks( request ) );
+    }
+
+    protected async* streamChunks( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    {
+        this.assertRequestSupported( request );
+
         const apiKey = this.getApiKey( this.defaultEnvVar );
         const payload = this.buildPayload( request, true );
         const transport = this.resolveTransportOptions( request );
@@ -163,6 +199,7 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
             const choice = chunkData.choices?.[0];
             const delta = choice?.delta;
             const deltaContent = delta?.content ?? '';
+            const deltaReasoning = delta?.reasoning_content ?? delta?.reasoning ?? undefined;
             const finishReason = this.mapFinishReason( choice?.finish_reason );
             const usage = chunkData.usage ? this.parseUsage( chunkData.usage ) : undefined;
 
@@ -175,7 +212,8 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
 
                     yield createStreamChunk( i === 0 ? deltaContent : '', 
                         {
-                            deltaToolCall : {
+                            deltaReasoningContent : i === 0 && deltaReasoning ? deltaReasoning : undefined,
+                            deltaToolCall         : {
                                 index     : tc.index ?? 0,
                                 id        : tc.id,
                                 name      : tc.function?.name,
@@ -191,9 +229,10 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
             {
                 yield createStreamChunk( deltaContent, 
                     {
+                        deltaReasoningContent : deltaReasoning ? deltaReasoning : undefined,
                         finishReason,
                         usage,
-                        raw : chunkData
+                        raw                   : chunkData
                     } );
             }
         }
@@ -242,6 +281,13 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
             payload.top_p = this.config.topP;
         }
 
+        this.applyStructuredOutput( request, payload, messages );
+
+        if( request.promptCacheKey )
+        {
+            payload.prompt_cache_key = request.promptCacheKey;
+        }
+
         if( request.tools && request.tools.length > 0 )
         {
             payload.tools = request.tools.map( ( tool ) => 
@@ -287,6 +333,61 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
         return payload;
     }
 
+    /** True when assistant `reasoningContent` must be re-sent as `reasoning_content` (e.g. DeepSeek). */
+    protected get echoesReasoningContent(): boolean
+    {
+        return false;
+    }
+
+    /**
+     * Wire format for `outputSchema`. OpenAI-compatible providers without `json_schema`
+     * (e.g. DeepSeek) override this to 'json_object'.
+     */
+    protected get structuredWireFormat(): 'json_schema' | 'json_object'
+    {
+        return 'json_schema';
+    }
+
+    protected applyStructuredOutput( 
+        request: ModelRequest, 
+        payload: Record<string, unknown>, 
+        messages: Array<Record<string, unknown>> 
+    ): void
+    {
+        const mode = resolveOutputMode( request );
+
+        if( !mode )
+        {
+            return;
+        }
+
+        const useSchema = mode === 'json_schema' && this.structuredWireFormat === 'json_schema';
+
+        if( useSchema )
+        {
+            const schema = toJsonSchema( request.outputSchema );
+
+            payload.response_format = {
+                type        : 'json_schema',
+                json_schema : { name : 'response', strict : isStrictCompatible( schema ), schema }
+            };
+
+            return;
+        }
+
+        if( mode === 'json_schema' )
+        {
+            this.emitWarning( {
+                code    : 'STRUCTURED_OUTPUT_DOWNGRADE',
+                message : `${this.provider} has no json_schema response format; using json_object with the schema in a system instruction`,
+                details : { provider : this.provider, model : this.model }
+            } );
+        }
+
+        payload.response_format = { type : 'json_object' };
+        messages.unshift( { role : 'system', content : schemaInstruction( request.outputSchema ) } );
+    }
+
     protected formatMessages( request: ModelRequest ): Array<Record<string, unknown>>
     {
         const formatted: Array<Record<string, unknown>> = [];
@@ -308,6 +409,8 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
 
     protected formatSingleMessage( msg: ChatMessage ): Record<string, unknown>
     {
+        assertAttachmentRole( msg.role, msg.attachments );
+
         if( msg.role === 'tool' )
         {
             return {
@@ -324,6 +427,11 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
                     role    : 'assistant',
                     content : msg.content || null
                 };
+
+            if( this.echoesReasoningContent && msg.reasoningContent !== undefined )
+            {
+                res.reasoning_content = msg.reasoningContent;
+            }
 
             if( msg.toolCalls && msg.toolCalls.length > 0 )
             {
@@ -346,50 +454,9 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
 
         if( msg.attachments && msg.attachments.length > 0 )
         {
-            const parts: Array<Record<string, unknown>> = [];
-
-            if( msg.content )
-            {
-                parts.push( { type : 'text', text : msg.content } );
-            }
-
-            for( const att of msg.attachments )
-            {
-                if( att.type === 'image' )
-                {
-                    let url = att.url;
-
-                    if( !url && att.data )
-                    {
-                        const base64Data = typeof att.data === 'string' 
-                            ? att.data 
-                            : Buffer.from( att.data ).toString( 'base64' );
-                        url = `data:${att.mimeType};base64,${base64Data}`;
-                    }
-
-                    if( url )
-                    {
-                        parts.push( { type : 'image_url', image_url : { url } } );
-                    }
-                }
-                else if( att.type === 'audio' && att.data )
-                {
-                    const base64Data = typeof att.data === 'string'
-                        ? att.data
-                        : Buffer.from( att.data ).toString( 'base64' );
-                    const format = att.mimeType.split( '/' )[1] ?? 'wav';
-
-                    parts.push( 
-                        {
-                            type        : 'input_audio',
-                            input_audio : { data : base64Data, format }
-                        } );
-                }
-            }
-
             return {
                 role    : msg.role,
-                content : parts
+                content : toOpenAIParts( this.provider, msg.content, msg.attachments )
             };
         }
 
@@ -412,24 +479,13 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
         {
             if( tc.type === 'function' && tc.function )
             {
-                let args: Record<string, unknown>;
-
-                try
-                {
-                    args = typeof tc.function.arguments === 'string' 
-                        ? JSON.parse( tc.function.arguments ) 
-                        : ( tc.function.arguments ?? {} );
-                }
-                catch
-                {
-                    args = {};
-                }
+                const name = tc.function.name ?? '';
 
                 parsed.push( 
                     {
                         id        : tc.id ?? '',
-                        name      : tc.function.name ?? '',
-                        arguments : args
+                        name,
+                        arguments : parseToolArguments( this.provider, name, tc.function.arguments )
                     } );
             }
         }

@@ -1,5 +1,7 @@
 import { BaseProviderAdapter } from './base.js';
 import type { 
+    ModelCapabilities,
+    CacheControl,
     ModelConfig, 
     ModelRequest, 
     ModelResponse, 
@@ -8,8 +10,12 @@ import type {
     UsageMetrics
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
-import { ProviderError } from '../core/error.js';
+import { InvalidInputError, ProviderError } from '../core/error.js';
+import { toAnthropicBlocks } from '../core/multimodal.js';
+import { parseToolArguments } from '../core/tool-stream.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
+
+const STRUCTURED_TOOL_NAME = 'structured_output';
 
 interface RawAnthropicUsage
 {
@@ -50,8 +56,26 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
         this.#baseUrl = config.baseUrl ?? 'https://api.anthropic.com';
     }
 
+    protected override get defaultCapabilities(): ModelCapabilities
+    {
+        return {
+            structuredOutput   : true,
+            embeddings         : false,
+            reasoningContent   : false,
+            promptCacheControl : true,
+            multimodal         : { image : true, audio : false, video : false, document : true }
+        };
+    }
+
+    protected override get supportsMessageCacheControl(): boolean
+    {
+        return true;
+    }
+
     public async generate( request: ModelRequest ): Promise<ModelResponse>
     {
+        this.assertRequestSupported( request );
+
         const apiKey = this.getApiKey( 'ANTHROPIC_API_KEY' );
         const payload = this.buildPayload( request, false );
         const transport = this.resolveTransportOptions( request );
@@ -64,7 +88,7 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                     'Content-Type'      : 'application/json',
                     'x-api-key'         : apiKey,
                     'anthropic-version' : '2023-06-01',
-                    'anthropic-beta'    : 'prompt-caching-2024-07-31,output-128k-2025-02-19'
+                    'anthropic-beta'    : this.betaHeader( request )
                 },
                 body : JSON.stringify( payload )
             },
@@ -74,6 +98,7 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
         const data = await response.json() as RawAnthropicResponse;
         let content = '';
         const toolCalls: ToolCall[] = [];
+        let structuredTool = false;
 
         if( data.content && Array.isArray( data.content ) )
         {
@@ -83,33 +108,48 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                 {
                     content += block.text;
                 }
+                else if( block.type === 'tool_use' && request.outputSchema && block.name === STRUCTURED_TOOL_NAME )
+                {
+                    structuredTool = true;
+                    content += JSON.stringify( block.input ?? null );
+                }
                 else if( block.type === 'tool_use' )
                 {
+                    const name = block.name ?? '';
+
                     toolCalls.push( 
                         {
                             id        : block.id ?? '',
-                            name      : block.name ?? '',
-                            arguments : block.input ?? {}
+                            name,
+                            arguments : parseToolArguments( this.provider, name, block.input )
                         } );
                 }
             }
         }
 
-        const finishReason = this.mapFinishReason( data.stop_reason );
+        const mappedReason = this.mapFinishReason( data.stop_reason );
+        const finishReason = structuredTool && mappedReason === 'tool_calls' ? 'stop' : mappedReason;
         const usage = this.parseUsage( data.usage );
 
-        return {
+        return this.withStructured( request, {
             content,
             role      : 'assistant',
             toolCalls : toolCalls.length > 0 ? toolCalls : undefined,
             usage,
             finishReason,
             raw       : data
-        };
+        } );
     }
 
-    public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    public stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
     {
+        return this.finalizeChunks( request, this.streamChunks( request ) );
+    }
+
+    protected async* streamChunks( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    {
+        this.assertRequestSupported( request );
+
         const apiKey = this.getApiKey( 'ANTHROPIC_API_KEY' );
         const payload = this.buildPayload( request, true );
         const transport = this.resolveTransportOptions( request );
@@ -122,7 +162,7 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                     'Content-Type'      : 'application/json',
                     'x-api-key'         : apiKey,
                     'anthropic-version' : '2023-06-01',
-                    'anthropic-beta'    : 'prompt-caching-2024-07-31,output-128k-2025-02-19'
+                    'anthropic-beta'    : this.betaHeader( request )
                 },
                 body : JSON.stringify( payload )
             },
@@ -137,6 +177,7 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
 
         let accumulatedUsage: RawAnthropicUsage = {};
         const activeToolCalls = new Map<number, { id: string, name: string }>();
+        const structuredBlocks = new Set<number>();
         let sawMessageStop = false;
 
         for await ( const event of parseSSEStream( response.body ) )
@@ -203,7 +244,11 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                 const block = eventData.content_block as RawAnthropicContentBlock | undefined;
                 const index = ( eventData.index as number ) ?? 0;
 
-                if( block?.type === 'tool_use' )
+                if( block?.type === 'tool_use' && request.outputSchema && block.name === STRUCTURED_TOOL_NAME )
+                {
+                    structuredBlocks.add( index );
+                }
+                else if( block?.type === 'tool_use' )
                 {
                     activeToolCalls.set( index, { id : block.id ?? '', name : block.name ?? '' } );
                     yield createStreamChunk( '', 
@@ -229,6 +274,10 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                 if( delta?.type === 'text_delta' && typeof delta.text === 'string' )
                 {
                     yield createStreamChunk( delta.text, { raw : eventData } );
+                }
+                else if( delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string' && structuredBlocks.has( index ) )
+                {
+                    yield createStreamChunk( delta.partial_json, { raw : eventData } );
                 }
                 else if( delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string' )
                 {
@@ -259,9 +308,11 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                     accumulatedUsage = { ...accumulatedUsage, ...( eventData.usage as RawAnthropicUsage ) };
                 }
 
+                const mapped = this.mapFinishReason( stopReason );
+
                 yield createStreamChunk( '', 
                     {
-                        finishReason : this.mapFinishReason( stopReason ),
+                        finishReason : structuredBlocks.size > 0 && mapped === 'tool_calls' ? 'stop' : mapped,
                         usage        : this.parseUsage( accumulatedUsage ),
                         raw          : eventData
                     } );
@@ -315,7 +366,11 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
             payload.top_p = this.config.topP;
         }
 
-        if( request.tools && request.tools.length > 0 )
+        if( request.outputSchema )
+        {
+            this.applyStructuredOutput( request, payload );
+        }
+        else if( request.tools && request.tools.length > 0 )
         {
             payload.tools = request.tools.map( ( tool ) => 
             {
@@ -356,16 +411,46 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
         return payload;
     }
 
-    protected formatMessagesAndSystem( request: ModelRequest ): { system?: string, messages: Array<Record<string, unknown>> }
+    /**
+     * Anthropic structured output: a forced synthetic tool whose input schema is the output
+     * schema (works on every model). The tool input is surfaced as the response text.
+     */
+    protected applyStructuredOutput( request: ModelRequest, payload: Record<string, unknown> ): void
     {
-        let system = request.systemPrompt ?? this.config.systemPrompt;
+        if( request.tools && request.tools.length > 0 )
+        {
+            throw new InvalidInputError( 
+                'Anthropic outputSchema cannot be combined with tools in one request (structured output uses a forced tool call)' 
+            );
+        }
+
+        payload.tools = [ {
+            name         : STRUCTURED_TOOL_NAME,
+            description  : 'Return the final answer as structured data matching this schema.',
+            input_schema : toJsonSchema( request.outputSchema )
+        } ];
+        payload.tool_choice = { type : 'tool', name : STRUCTURED_TOOL_NAME };
+    }
+
+    protected formatMessagesAndSystem( request: ModelRequest ): { 
+        system?  : string | Array<Record<string, unknown>>
+        messages : Array<Record<string, unknown>> 
+    }
+    {
+        const systemParts: Array<{ text: string, cacheControl?: CacheControl }> = [];
+        const configSystem = request.systemPrompt ?? this.config.systemPrompt;
         const messages: Array<Record<string, unknown>> = [];
+
+        if( configSystem )
+        {
+            systemParts.push( { text : configSystem } );
+        }
 
         for( const msg of request.messages )
         {
             if( msg.role === 'system' )
             {
-                system = system ? `${system}\n\n${msg.content}` : msg.content;
+                systemParts.push( { text : msg.content, cacheControl : msg.cacheControl } );
                 continue;
             }
 
@@ -373,15 +458,17 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
             {
                 messages.push( 
                     {
-                        role : 'user',
-                        content : 
-                    [
-                        {
-                            type        : 'tool_result',
-                            tool_use_id : msg.toolCallId ?? '',
-                            content     : msg.content
-                        }
-                    ]
+                        role    : 'user',
+                        content : this.#withCacheControl( 
+                            [
+                                {
+                                    type        : 'tool_result',
+                                    tool_use_id : msg.toolCallId ?? '',
+                                    content     : msg.content
+                                }
+                            ], 
+                            msg.cacheControl 
+                        )
                     } );
                 continue;
             }
@@ -409,61 +496,93 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                     }
                 }
 
-                messages.push( { role : 'assistant', content : blocks.length > 0 ? blocks : '' } );
+                messages.push( { 
+                    role    : 'assistant', 
+                    content : blocks.length > 0 ? this.#withCacheControl( blocks, msg.cacheControl ) : '' 
+                } );
                 continue;
             }
 
             if( msg.attachments && msg.attachments.length > 0 )
             {
-                const blocks: Array<Record<string, unknown>> = [];
-
-                for( const att of msg.attachments )
-                {
-                    const base64Data = att.data 
-                        ? ( typeof att.data === 'string' ? att.data : Buffer.from( att.data ).toString( 'base64' ) )
-                        : '';
-
-                    if( att.type === 'image' && base64Data )
-                    {
-                        blocks.push( 
-                            {
-                                type : 'image',
-                                source : 
-                            {
-                                type       : 'base64',
-                                media_type : att.mimeType,
-                                data       : base64Data
-                            }
-                            } );
-                    }
-                    else if( att.type === 'document' && base64Data )
-                    {
-                        blocks.push( 
-                            {
-                                type : 'document',
-                                source : 
-                            {
-                                type       : 'base64',
-                                media_type : att.mimeType,
-                                data       : base64Data
-                            }
-                            } );
-                    }
-                }
-
-                if( msg.content )
-                {
-                    blocks.push( { type : 'text', text : msg.content } );
-                }
-
-                messages.push( { role : 'user', content : blocks } );
+                messages.push( { 
+                    role    : 'user', 
+                    content : this.#withCacheControl( 
+                        toAnthropicBlocks( this.provider, msg.content, msg.attachments ), 
+                        msg.cacheControl 
+                    ) 
+                } );
                 continue;
             }
 
-            messages.push( { role : 'user', content : msg.content } );
+            messages.push( { 
+                role    : 'user', 
+                content : msg.cacheControl 
+                    ? this.#withCacheControl( [ { type : 'text', text : msg.content } ], msg.cacheControl ) 
+                    : msg.content 
+            } );
         }
 
-        return { system, messages };
+        if( systemParts.length === 0 )
+        {
+            return { system : undefined, messages };
+        }
+
+        if( systemParts.some( ( part ) => {return part.cacheControl;} ) )
+        {
+            return {
+                system : systemParts.map( ( part ) => 
+                {
+                    return {
+                        type : 'text',
+                        text : part.text,
+                        ...( part.cacheControl ? { cache_control : this.#wireCacheControl( part.cacheControl ) } : {} )
+                    };
+                } ),
+                messages
+            };
+        }
+
+        return { system : systemParts.map( ( part ) => {return part.text;} ).join( '\n\n' ), messages };
+    }
+
+    #wireCacheControl( control: CacheControl ): Record<string, unknown>
+    {
+        return control.ttl ? { type : control.type, ttl : control.ttl } : { type : control.type };
+    }
+
+    /** Marks the last block of a message as a cache breakpoint. */
+    #withCacheControl( 
+        blocks: Array<Record<string, unknown>>, 
+        control?: CacheControl 
+    ): Array<Record<string, unknown>>
+    {
+        if( !control )
+        {
+            return blocks;
+        }
+
+        if( blocks.length === 0 )
+        {
+            throw new InvalidInputError( 'cacheControl cannot be applied to a message with no content blocks' );
+        }
+
+        const last = blocks[ blocks.length - 1 ];
+
+        return [ ...blocks.slice( 0, -1 ), { ...last, cache_control : this.#wireCacheControl( control ) } ];
+    }
+
+    /** Beta flags; the extended-TTL flag is only sent when a request uses `ttl`. */
+    protected betaHeader( request: ModelRequest ): string
+    {
+        const flags = [ 'prompt-caching-2024-07-31', 'output-128k-2025-02-19' ];
+
+        if( request.messages.some( ( msg ) => {return msg.cacheControl?.ttl;} ) )
+        {
+            flags.push( 'extended-cache-ttl-2025-04-11' );
+        }
+
+        return flags.join( ',' );
     }
 
     protected parseUsage( rawUsage?: RawAnthropicUsage ): UsageMetrics | undefined

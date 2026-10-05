@@ -5,3 +5,7 @@ export * from './warning.js';
 export * from './stream.js';
 export * from './ndjson.js';
 export * from './schema.js';
+export * from './tool-stream.js';
+export * from './multimodal.js';
+export * from './structured-output.js';
+export * from './embeddings.js';

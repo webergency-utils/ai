@@ -28,14 +28,24 @@ export type ToolCallResult =
         isError?   : boolean
     }
 
+export type CacheControl =
+    {
+        type : 'ephemeral'
+        ttl? : '5m' | '1h'
+    }
+
 export type ChatMessage =
     {
-        role         : MessageRole
-        content      : string
-        name?        : string
-        toolCallId?  : string
-        toolCalls?   : ToolCall[]
-        attachments? : MessageAttachment[]
+        role              : MessageRole
+        content           : string
+        name?             : string
+        toolCallId?       : string
+        toolCalls?        : ToolCall[]
+        attachments?      : MessageAttachment[]
+        /** Assistant-only: provider reasoning text, round-tripped where the provider requires it. */
+        reasoningContent? : string
+        /** Prompt-cache breakpoint (Anthropic-style). Fails loudly on providers without support. */
+        cacheControl?     : CacheControl
     }
 
 export type ToolDefinition =
@@ -56,6 +66,21 @@ export type UsageMetrics =
         raw?                     : Record<string, unknown>
     }
 
+export type OutputMode = 'json' | 'json_schema';
+
+/**
+ * Honest per-adapter capability flags. `embeddings` states whether the provider
+ * is supported by `createEmbeddingModel` (chat models never embed themselves).
+ */
+export type ModelCapabilities =
+    {
+        structuredOutput    : boolean
+        embeddings          : boolean
+        reasoningContent    : boolean
+        promptCacheControl  : boolean
+        multimodal          : Record<AttachmentType, boolean>
+    }
+
 export type ModelConfig =
     {
         provider       : string
@@ -71,6 +96,8 @@ export type ModelConfig =
         timeoutMs?     : number
         idleTimeoutMs? : number
         maxRetries?    : number
+        /** Overrides adapter capability defaults (e.g. a local model without schema support). */
+        capabilities?  : Partial<Omit<ModelCapabilities, 'multimodal'>> & { multimodal? : Partial<Record<AttachmentType, boolean>> }
     }
 
 export type ModelRequestAttemptInfo =
@@ -91,6 +118,12 @@ export type ModelRequest =
         systemPrompt?  : string
         stream?        : boolean
         rawOptions?    : Record<string, unknown>
+        /** JSON Schema the final answer must satisfy; result is returned as `ModelResponse.structured`. */
+        outputSchema?  : JsonSchema | Record<string, unknown>
+        /** Defaults to 'json_schema' when `outputSchema` is present. */
+        outputMode?    : OutputMode
+        /** OpenAI prompt-cache routing key. */
+        promptCacheKey? : string
         signal?        : AbortSignal
         timeoutMs?     : number
         idleTimeoutMs? : number
@@ -104,6 +137,9 @@ export type ModelResponse =
         content      : string
         role         : 'assistant'
         toolCalls?   : ToolCall[]
+        /** Parsed and schema-validated JSON when `outputSchema` was requested. */
+        structured?  : unknown
+        reasoningContent? : string
         usage?       : UsageMetrics
         /**
          * True when the provider returned no usage metrics.
@@ -117,6 +153,7 @@ export type ModelResponse =
 export type ModelStreamChunk =
     {
         deltaContent  : string
+        deltaReasoningContent? : string
         deltaToolCall?: 
         {
             index      : number
@@ -125,6 +162,8 @@ export type ModelStreamChunk =
             arguments? : string
         }
         toolCalls?    : ToolCall[]
+        /** Terminal chunk only: parsed and schema-validated output when `outputSchema` was requested. */
+        structured?   : unknown
         usage?        : UsageMetrics
         finishReason? : 'stop' | 'tool_calls' | 'length' | 'content_filter' | 'error' | 'other'
         raw?          : unknown

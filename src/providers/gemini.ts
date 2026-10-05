@@ -1,5 +1,6 @@
 import { BaseProviderAdapter } from './base.js';
 import type { 
+    ModelCapabilities,
     ModelConfig, 
     ModelRequest, 
     ModelResponse, 
@@ -8,7 +9,10 @@ import type {
     UsageMetrics
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
+import { resolveOutputMode, toGeminiSchema } from '../core/structured-output.js';
 import { ProviderError } from '../core/error.js';
+import { toGeminiParts } from '../core/multimodal.js';
+import { parseToolArguments } from '../core/tool-stream.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
 
 interface RawGeminiPart
@@ -17,6 +21,10 @@ interface RawGeminiPart
     inlineData?: {
         mimeType: string
         data: string
+    }
+    fileData?: {
+        mimeType: string
+        fileUri: string
     }
     functionCall?: {
         name: string
@@ -64,8 +72,21 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
         this.#baseUrl = config.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta';
     }
 
+    protected override get defaultCapabilities(): ModelCapabilities
+    {
+        return {
+            structuredOutput   : true,
+            embeddings         : true,
+            reasoningContent   : false,
+            promptCacheControl : false,
+            multimodal         : { image : true, audio : true, video : true, document : true }
+        };
+    }
+
     public async generate( request: ModelRequest ): Promise<ModelResponse>
     {
+        this.assertRequestSupported( request );
+
         const apiKey = this.getApiKey( 'GEMINI_API_KEY' );
         const payload = this.buildPayload( request );
         const transport = this.resolveTransportOptions( request );
@@ -105,7 +126,7 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
                     toolCalls.push( {
                         id        : `gemini_call_${Date.now()}_${callIndex++}`,
                         name      : part.functionCall.name,
-                        arguments : part.functionCall.args ?? {}
+                        arguments : parseToolArguments( this.provider, part.functionCall.name, part.functionCall.args )
                     } );
                 }
             }
@@ -120,18 +141,25 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
 
         const usage = this.parseUsage( data.usageMetadata );
 
-        return {
+        return this.withStructured( request, {
             content,
             role      : 'assistant',
             toolCalls : toolCalls.length > 0 ? toolCalls : undefined,
             usage,
             finishReason,
             raw       : data
-        };
+        } );
     }
 
-    public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    public stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
     {
+        return this.finalizeChunks( request, this.streamChunks( request ) );
+    }
+
+    protected async* streamChunks( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    {
+        this.assertRequestSupported( request );
+
         const apiKey = this.getApiKey( 'GEMINI_API_KEY' );
         const payload = this.buildPayload( request );
         const transport = this.resolveTransportOptions( request );
@@ -219,7 +247,8 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
 
                     yield createStreamChunk( i === 0 ? deltaContent : '', {
                         deltaToolCall : {
-                            index     : toolCallIndex++,
+                            index     : toolCallIndex,
+                            id        : `gemini_call_${Date.now()}_${toolCallIndex++}`,
                             name      : fc.name,
                             arguments : JSON.stringify( fc.args )
                         },
@@ -278,6 +307,18 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
         if( this.config.topP !== undefined )
         {
             generationConfig.topP = this.config.topP;
+        }
+
+        const outputMode = resolveOutputMode( request );
+
+        if( outputMode )
+        {
+            generationConfig.responseMimeType = 'application/json';
+
+            if( outputMode === 'json_schema' )
+            {
+                generationConfig.responseSchema = toGeminiSchema( toJsonSchema( request.outputSchema ) );
+            }
         }
 
         if( Object.keys( generationConfig ).length > 0 )
@@ -405,22 +446,7 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
 
             if( msg.attachments && msg.attachments.length > 0 )
             {
-                for( const att of msg.attachments )
-                {
-                    const base64Data = att.data 
-                        ? ( typeof att.data === 'string' ? att.data : Buffer.from( att.data ).toString( 'base64' ) )
-                        : '';
-
-                    if( base64Data )
-                    {
-                        parts.push( {
-                            inlineData : {
-                                mimeType : att.mimeType,
-                                data     : base64Data
-                            }
-                        } );
-                    }
-                }
+                parts.push( ...toGeminiParts( this.provider, msg.attachments ) as RawGeminiPart[] );
             }
 
             if( msg.toolCalls && msg.toolCalls.length > 0 )

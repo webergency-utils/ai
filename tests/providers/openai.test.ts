@@ -192,6 +192,7 @@ describe( 'OpenAIProviderAdapter', () =>
     {
         const chunk1 = 'data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}\n\n';
         const chunk2 = 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":"{\\"q\\""}},{"index":1,"id":"call_2","function":{"name":"lookup","arguments":"{\\"id\\""}}]},"finish_reason":null}]}\n\n';
+        const chunk2b = 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\\"cats\\"}"}},{"index":1,"function":{"arguments":":7}"}}]},"finish_reason":null}]}\n\n';
         const chunk3 = 'data: {"choices":[{"delta":{"content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}\n\n';
         const chunkDone = 'data: [DONE]\n\n';
 
@@ -199,7 +200,7 @@ describe( 'OpenAIProviderAdapter', () =>
         const stream = new ReadableStream<Uint8Array>( {
             start( controller )
             {
-                controller.enqueue( encoder.encode( chunk1 + chunk2 + chunk3 + chunkDone ) );
+                controller.enqueue( encoder.encode( chunk1 + chunk2 + chunk2b + chunk3 + chunkDone ) );
                 controller.close();
             }
         } );
@@ -223,7 +224,7 @@ describe( 'OpenAIProviderAdapter', () =>
             chunks.push( chunk );
         }
 
-        expect( chunks ).toHaveLength( 4 );
+        expect( chunks ).toHaveLength( 7 );
         expect( chunks[0].deltaContent ).toBe( 'Hello' );
         expect( chunks[1].deltaToolCall ).toEqual( {
             index     : 0,
@@ -237,8 +238,12 @@ describe( 'OpenAIProviderAdapter', () =>
             name      : 'lookup',
             arguments : '{"id"'
         } );
-        expect( chunks[3].finishReason ).toBe( 'stop' );
-        expect( chunks[3].usage?.totalTokens ).toBe( 15 );
+        expect( chunks[5].finishReason ).toBe( 'stop' );
+        expect( chunks[5].usage?.totalTokens ).toBe( 15 );
+        expect( chunks[6].toolCalls ).toEqual( [
+            { id : 'call_1', name : 'search', arguments : { q : 'cats' } },
+            { id : 'call_2', name : 'lookup', arguments : { id : 7 } }
+        ] );
     } );
 
     it( 'throws when the stream ends without [DONE] (AE14)', async () => 

@@ -1,5 +1,6 @@
 import { BaseProviderAdapter } from './base.js';
 import type { 
+    ModelCapabilities,
     ModelConfig, 
     ModelRequest, 
     ModelResponse, 
@@ -9,7 +10,10 @@ import type {
     UsageMetrics
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
+import { resolveOutputMode } from '../core/structured-output.js';
 import { ProviderError } from '../core/error.js';
+import { assertAttachmentRole, toOllamaImages } from '../core/multimodal.js';
+import { parseToolArguments } from '../core/tool-stream.js';
 import { createStreamChunk } from '../core/stream.js';
 import { createNDJSONDecoder } from '../core/ndjson.js';
 
@@ -17,7 +21,7 @@ interface RawOllamaToolCall
 {
     function?: {
         name?: string
-        arguments?: Record<string, unknown>
+        arguments?: Record<string, unknown> | string
     }
 }
 
@@ -46,8 +50,21 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
         this.#baseUrl = config.baseUrl ?? 'http://127.0.0.1:11434';
     }
 
+    protected override get defaultCapabilities(): ModelCapabilities
+    {
+        return {
+            structuredOutput   : true,
+            embeddings         : true,
+            reasoningContent   : false,
+            promptCacheControl : false,
+            multimodal         : { image : true, audio : false, video : false, document : false }
+        };
+    }
+
     public async generate( request: ModelRequest ): Promise<ModelResponse>
     {
+        this.assertRequestSupported( request );
+
         const payload = this.buildPayload( request, false );
         const transport = this.resolveTransportOptions( request );
 
@@ -67,18 +84,25 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
         const usage = this.parseUsage( data );
         const finishReason = this.mapFinishReason( data.done_reason, toolCalls.length > 0 );
 
-        return {
+        return this.withStructured( request, {
             content   : message?.content ?? '',
             role      : 'assistant',
             toolCalls : toolCalls.length > 0 ? toolCalls : undefined,
             usage,
             finishReason,
             raw       : data
-        };
+        } );
     }
 
-    public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    public stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
     {
+        return this.finalizeChunks( request, this.streamChunks( request ) );
+    }
+
+    protected async* streamChunks( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    {
+        this.assertRequestSupported( request );
+
         const payload = this.buildPayload( request, true );
         const transport = this.resolveTransportOptions( request );
 
@@ -253,6 +277,13 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
             payload.options = options;
         }
 
+        const outputMode = resolveOutputMode( request );
+
+        if( outputMode )
+        {
+            payload.format = outputMode === 'json_schema' ? toJsonSchema( request.outputSchema ) : 'json';
+        }
+
         if( request.tools && request.tools.length > 0 )
         {
             payload.tools = request.tools.map( ( tool ) => 
@@ -303,6 +334,8 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
 
     protected formatSingleMessage( msg: ChatMessage ): Record<string, unknown>
     {
+        assertAttachmentRole( msg.role, msg.attachments );
+
         const out: Record<string, unknown> = 
             {
                 role    : msg.role,
@@ -311,26 +344,7 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
 
         if( msg.attachments && msg.attachments.length > 0 )
         {
-            const images: string[] = [];
-
-            for( const att of msg.attachments )
-            {
-                if( att.type === 'image' )
-                {
-                    if( att.data )
-                    {
-                        const b64 = typeof att.data === 'string' 
-                            ? att.data 
-                            : Buffer.from( att.data ).toString( 'base64' );
-                        images.push( b64 );
-                    }
-                }
-            }
-
-            if( images.length > 0 )
-            {
-                out.images = images;
-            }
+            out.images = toOllamaImages( this.provider, msg.attachments );
         }
 
         return out;
@@ -354,7 +368,7 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
                     {
                         id        : `ollama_call_${index++}`,
                         name      : tc.function.name,
-                        arguments : tc.function.arguments ?? {}
+                        arguments : parseToolArguments( this.provider, tc.function.name, tc.function.arguments )
                     } );
             }
         }
