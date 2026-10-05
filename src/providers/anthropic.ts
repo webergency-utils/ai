@@ -54,24 +54,22 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
     {
         const apiKey = this.getApiKey( 'ANTHROPIC_API_KEY' );
         const payload = this.buildPayload( request, false );
+        const transport = this.resolveTransportOptions( request );
 
-        const response = await fetch( `${this.#baseUrl}/v1/messages`, 
-            {
-                method : 'POST',
-                headers : 
-            {
-                'Content-Type'      : 'application/json',
-                'x-api-key'         : apiKey,
-                'anthropic-version' : '2023-06-01',
-                'anthropic-beta'    : 'prompt-caching-2024-07-31,output-128k-2025-02-19'
-            },
+        const response = await this.request( {
+            url  : `${this.#baseUrl}/v1/messages`,
+            init : {
+                method  : 'POST',
+                headers : {
+                    'Content-Type'      : 'application/json',
+                    'x-api-key'         : apiKey,
+                    'anthropic-version' : '2023-06-01',
+                    'anthropic-beta'    : 'prompt-caching-2024-07-31,output-128k-2025-02-19'
+                },
                 body : JSON.stringify( payload )
-            } );
-
-        if( !response.ok )
-        {
-            await this.handleErrorResponse( response );
-        }
+            },
+            ...transport
+        } );
 
         const data = await response.json() as RawAnthropicResponse;
         let content = '';
@@ -114,24 +112,23 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
     {
         const apiKey = this.getApiKey( 'ANTHROPIC_API_KEY' );
         const payload = this.buildPayload( request, true );
+        const transport = this.resolveTransportOptions( request );
 
-        const response = await fetch( `${this.#baseUrl}/v1/messages`, 
-            {
-                method : 'POST',
-                headers : 
-            {
-                'Content-Type'      : 'application/json',
-                'x-api-key'         : apiKey,
-                'anthropic-version' : '2023-06-01',
-                'anthropic-beta'    : 'prompt-caching-2024-07-31,output-128k-2025-02-19'
-            },
+        const response = await this.request( {
+            url  : `${this.#baseUrl}/v1/messages`,
+            init : {
+                method  : 'POST',
+                headers : {
+                    'Content-Type'      : 'application/json',
+                    'x-api-key'         : apiKey,
+                    'anthropic-version' : '2023-06-01',
+                    'anthropic-beta'    : 'prompt-caching-2024-07-31,output-128k-2025-02-19'
+                },
                 body : JSON.stringify( payload )
-            } );
-
-        if( !response.ok )
-        {
-            await this.handleErrorResponse( response );
-        }
+            },
+            stream : true,
+            ...transport
+        } );
 
         if( !response.body )
         {

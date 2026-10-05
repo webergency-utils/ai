@@ -197,7 +197,8 @@ describe( 'GeminiProviderAdapter', () =>
         } );
 
         await expect( adapter.generate( {
-            messages : [ { role : 'user', content : 'test' } ]
+            messages : [ { role : 'user', content : 'test' } ],
+            retry    : false
         } ) ).rejects.toThrow( RateLimitError );
     } );
 
@@ -218,7 +219,8 @@ describe( 'GeminiProviderAdapter', () =>
         } );
 
         await expect( adapter.generate( {
-            messages : [ { role : 'user', content : 'test' } ]
+            messages : [ { role : 'user', content : 'test' } ],
+            retry    : false
         } ) ).rejects.toThrow( ProviderError );
     } );
 

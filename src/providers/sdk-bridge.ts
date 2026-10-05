@@ -1,5 +1,5 @@
 import type { ModelProtocol } from '../core/protocol.js';
-import type { ModelRequest, ModelResponse, ModelStreamChunk } from '../core/types.js';
+import type { ModelRequest, ModelResponse, ModelStreamChunk, UsageMetrics } from '../core/types.js';
 import { MissingDependencyError, ProviderError } from '../core/error.js';
 
 type AnyFn = ( ...args: unknown[] ) => unknown;
@@ -38,6 +38,57 @@ export interface SDKClientWrapper
 {
     client : unknown
     [key: string]: unknown
+}
+
+function parseOpenAIUsage( raw: unknown ): UsageMetrics | undefined
+{
+    if( !raw || typeof raw !== 'object' )
+    {
+        return undefined;
+    }
+
+    const usage = raw as Record<string, unknown>;
+    const promptTokens = Number( usage.prompt_tokens ?? 0 );
+    const completionTokens = Number( usage.completion_tokens ?? 0 );
+    const totalTokens = Number( usage.total_tokens ?? ( promptTokens + completionTokens ) );
+
+    if( !Number.isFinite( promptTokens ) && !Number.isFinite( completionTokens ) )
+    {
+        return undefined;
+    }
+
+    return {
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        raw : usage
+    };
+}
+
+function finalizeBridgeResponse( 
+    content: string, 
+    usage: UsageMetrics | undefined, 
+    raw: unknown 
+): ModelResponse
+{
+    if( usage )
+    {
+        return {
+            content,
+            role         : 'assistant',
+            usage,
+            finishReason : 'stop',
+            raw
+        };
+    }
+
+    return {
+        content,
+        role         : 'assistant',
+        usageMissing : true,
+        finishReason : 'stop',
+        raw
+    };
 }
 
 export class SDKBridgeAdapter implements ModelProtocol
@@ -109,22 +160,21 @@ export class SDKBridgeAdapter implements ModelProtocol
             return { role : m.role, content : m.content };
         } );
 
-        const res = await ( chat.create as AnyFn )( 
-            {
-                model  : this.model,
-                messages,
-                stream : false
-            } ) as Record<string, unknown>;
+        const res = await ( chat.create as AnyFn )( {
+            model  : this.model,
+            messages,
+            stream : false,
+            ...( request.signal ? { signal : request.signal } : {} )
+        } ) as Record<string, unknown>;
 
         const choices = res.choices as Array<Record<string, unknown>> | undefined;
         const msg = choices?.[0]?.message as Record<string, unknown> | undefined;
 
-        return {
-            content      : ( msg?.content as string ) ?? '',
-            role         : 'assistant',
-            finishReason : 'stop',
-            raw          : res
-        };
+        return finalizeBridgeResponse( 
+            ( msg?.content as string ) ?? '', 
+            parseOpenAIUsage( res.usage ), 
+            res 
+        );
     }
 
     private async callAnthropicSDK( request: ModelRequest ): Promise<ModelResponse>
@@ -141,12 +191,12 @@ export class SDKBridgeAdapter implements ModelProtocol
             return { role : m.role, content : m.content };
         } );
 
-        const res = await ( messagesApi.create as AnyFn )( 
-            {
-                model      : this.model,
-                messages,
-                max_tokens : request.maxTokens ?? 4096
-            } ) as Record<string, unknown>;
+        const res = await ( messagesApi.create as AnyFn )( {
+            model      : this.model,
+            messages,
+            max_tokens : request.maxTokens ?? 4096,
+            ...( request.signal ? { signal : request.signal } : {} )
+        } ) as Record<string, unknown>;
 
         const contentBlocks = res.content as Array<Record<string, unknown>> | undefined;
         let content = '';
@@ -162,12 +212,22 @@ export class SDKBridgeAdapter implements ModelProtocol
             }
         }
 
-        return {
-            content,
-            role         : 'assistant',
-            finishReason : 'stop',
-            raw          : res
-        };
+        const rawUsage = res.usage as Record<string, unknown> | undefined;
+        let usage: UsageMetrics | undefined;
+
+        if( rawUsage )
+        {
+            const promptTokens = Number( rawUsage.input_tokens ?? 0 );
+            const completionTokens = Number( rawUsage.output_tokens ?? 0 );
+            usage = {
+                promptTokens,
+                completionTokens,
+                totalTokens : promptTokens + completionTokens,
+                raw         : rawUsage
+            };
+        }
+
+        return finalizeBridgeResponse( content, usage, res );
     }
 
     private async callGeminiSDK( request: ModelRequest ): Promise<ModelResponse>
@@ -180,20 +240,33 @@ export class SDKBridgeAdapter implements ModelProtocol
         }
 
         const contents = request.messages.map( ( m ) => {return m.content;} ).join( '\n' );
-        const res = await ( modelsApi.generateContent as AnyFn )( 
-            {
-                model : this.model,
-                contents
-            } ) as Record<string, unknown>;
+        const res = await ( modelsApi.generateContent as AnyFn )( {
+            model : this.model,
+            contents,
+            ...( request.signal ? { signal : request.signal } : {} )
+        } ) as Record<string, unknown>;
 
         const text = typeof res.text === 'function' ? ( res.text as AnyFn )() : ( res.text ?? '' );
+        const rawUsage = ( res.usageMetadata ?? res.usage ) as Record<string, unknown> | undefined;
+        let usage: UsageMetrics | undefined;
 
-        return {
-            content      : ( text as string ) ?? '',
-            role         : 'assistant',
-            finishReason : 'stop',
-            raw          : res
-        };
+        if( rawUsage )
+        {
+            const promptTokens = Number( rawUsage.promptTokenCount ?? rawUsage.prompt_tokens ?? 0 );
+            const completionTokens = Number( 
+                rawUsage.candidatesTokenCount ?? rawUsage.completion_tokens ?? 0 
+            );
+            usage = {
+                promptTokens,
+                completionTokens,
+                totalTokens : Number( 
+                    rawUsage.totalTokenCount ?? rawUsage.total_tokens ?? ( promptTokens + completionTokens ) 
+                ),
+                raw : rawUsage
+            };
+        }
+
+        return finalizeBridgeResponse( ( text as string ) ?? '', usage, res );
     }
 
     private async callOllamaSDK( request: ModelRequest ): Promise<ModelResponse>
@@ -208,20 +281,25 @@ export class SDKBridgeAdapter implements ModelProtocol
             return { role : m.role, content : m.content };
         } );
 
-        const res = await ( this.#client.chat as AnyFn )( 
-            {
-                model : this.model,
-                messages
-            } ) as Record<string, unknown>;
+        const res = await ( this.#client.chat as AnyFn )( {
+            model : this.model,
+            messages,
+            ...( request.signal ? { signal : request.signal } : {} )
+        } ) as Record<string, unknown>;
 
         const msg = res.message as Record<string, unknown> | undefined;
+        const promptTokens = Number( res.prompt_eval_count ?? 0 );
+        const completionTokens = Number( res.eval_count ?? 0 );
+        const usage = ( promptTokens > 0 || completionTokens > 0 )
+            ? {
+                promptTokens,
+                completionTokens,
+                totalTokens : promptTokens + completionTokens,
+                raw         : res
+            }
+            : undefined;
 
-        return {
-            content      : ( msg?.content as string ) ?? '',
-            role         : 'assistant',
-            finishReason : 'stop',
-            raw          : res
-        };
+        return finalizeBridgeResponse( ( msg?.content as string ) ?? '', usage, res );
     }
 }
 

@@ -6,8 +6,17 @@ import { AnthropicProviderAdapter } from './anthropic.js';
 import { GeminiProviderAdapter } from './gemini.js';
 import { GroqProviderAdapter } from './groq.js';
 import { OllamaProviderAdapter } from './ollama.js';
+import { DeepSeekProviderAdapter } from './deepseek.js';
+import { MistralProviderAdapter } from './mistral.js';
 
 export type ProviderFactory = ( config: ModelConfig ) => ModelProtocol;
+
+function configCacheKey( config: ModelConfig ): string
+{
+    const keys = Object.keys( config ).sort();
+
+    return JSON.stringify( config, keys );
+}
 
 export class ModelRegistry
 {
@@ -42,7 +51,7 @@ export class ModelRegistry
             );
         }
 
-        const cacheKey = `${providerId}:${config.model}:${config.baseUrl ?? ''}`;
+        const cacheKey = configCacheKey( config );
 
         if( this.#cache.has( cacheKey ) )
         {
@@ -97,22 +106,12 @@ export class ModelRegistry
 
         this.register( 'deepseek', ( config ) => 
         {
-            return new OpenAIProviderAdapter( 
-                {
-                    ...config,
-                    provider : 'deepseek',
-                    baseUrl  : config.baseUrl ?? 'https://api.deepseek.com'
-                } );
+            return new DeepSeekProviderAdapter( config );
         } );
 
         this.register( 'mistral', ( config ) => 
         {
-            return new OpenAIProviderAdapter( 
-                {
-                    ...config,
-                    provider : 'mistral',
-                    baseUrl  : config.baseUrl ?? 'https://api.mistral.ai/v1'
-                } );
+            return new MistralProviderAdapter( config );
         } );
     }
 }

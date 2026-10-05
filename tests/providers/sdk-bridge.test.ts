@@ -63,12 +63,37 @@ describe( 'Vendor SDK Lazy Bridge', () =>
         } );
 
         expect( res.content ).toBe( 'Bridged OpenAI response' );
+        expect( res.usageMissing ).toBe( true );
         expect( mockOpenAIClient.chat.completions.create ).toHaveBeenCalledWith( 
             {
                 model    : 'gpt-4o',
                 messages : [ { role : 'user', content : 'Hello' } ],
                 stream   : false
             } );
+    } );
+
+    it( 'forwards AbortSignal into vendor SDK options and preserves usage when present', async () => 
+    {
+        const controller = new AbortController();
+        const create = vi.fn().mockResolvedValue( {
+            choices : [ { message : { content : 'ok' } } ],
+            usage   : { prompt_tokens : 2, completion_tokens : 3, total_tokens : 5 }
+        } );
+
+        const bridge = createSDKBridge( 'openai', 'gpt-4o', {
+            chat : { completions : { create } }
+        } );
+
+        const res = await bridge.generate( {
+            messages : [ { role : 'user', content : 'Hello' } ],
+            signal   : controller.signal
+        } );
+
+        expect( res.usageMissing ).toBeUndefined();
+        expect( res.usage?.totalTokens ).toBe( 5 );
+        expect( create ).toHaveBeenCalledWith( expect.objectContaining( {
+            signal : controller.signal
+        } ) );
     } );
 
     it( 'should wrap an Anthropic SDK client and execute messages', async () => 

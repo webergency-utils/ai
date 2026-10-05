@@ -9,6 +9,7 @@ import type {
     UsageMetrics
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
+import { ProviderError } from '../core/error.js';
 import { createStreamChunk } from '../core/stream.js';
 import { createNDJSONDecoder } from '../core/ndjson.js';
 
@@ -48,17 +49,17 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
     public async generate( request: ModelRequest ): Promise<ModelResponse>
     {
         const payload = this.buildPayload( request, false );
-        const response = await fetch( `${this.#baseUrl}/api/chat`, 
-            {
+        const transport = this.resolveTransportOptions( request );
+
+        const response = await this.request( {
+            url  : `${this.#baseUrl}/api/chat`,
+            init : {
                 method  : 'POST',
                 headers : { 'Content-Type' : 'application/json' },
                 body    : JSON.stringify( payload )
-            } );
-
-        if( !response.ok )
-        {
-            await this.handleErrorResponse( response );
-        }
+            },
+            ...transport
+        } );
 
         const data = await response.json() as RawOllamaResponse;
         const message = data.message;
@@ -79,21 +80,22 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
     public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
     {
         const payload = this.buildPayload( request, true );
-        const response = await fetch( `${this.#baseUrl}/api/chat`, 
-            {
+        const transport = this.resolveTransportOptions( request );
+
+        const response = await this.request( {
+            url  : `${this.#baseUrl}/api/chat`,
+            init : {
                 method  : 'POST',
                 headers : { 'Content-Type' : 'application/json' },
                 body    : JSON.stringify( payload )
-            } );
-
-        if( !response.ok )
-        {
-            await this.handleErrorResponse( response );
-        }
+            },
+            stream : true,
+            ...transport
+        } );
 
         if( !response.body )
         {
-            return;
+            throw new ProviderError( this.provider, 'Stream response had no body', response.status );
         }
 
         const reader = response.body.getReader();

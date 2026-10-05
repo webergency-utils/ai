@@ -81,22 +81,20 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
     {
         const apiKey = this.getApiKey( this.defaultEnvVar );
         const payload = this.buildPayload( request, false );
+        const transport = this.resolveTransportOptions( request );
 
-        const response = await fetch( `${this.#baseUrl}/chat/completions`, 
-            {
-                method : 'POST',
-                headers : 
-            {
-                'Content-Type'  : 'application/json',
-                'Authorization' : `Bearer ${apiKey}`
-            },
+        const response = await this.request( {
+            url    : `${this.#baseUrl}/chat/completions`,
+            init   : {
+                method  : 'POST',
+                headers : {
+                    'Content-Type'  : 'application/json',
+                    'Authorization' : `Bearer ${apiKey}`
+                },
                 body : JSON.stringify( payload )
-            } );
-
-        if( !response.ok )
-        {
-            await this.handleErrorResponse( response );
-        }
+            },
+            ...transport
+        } );
 
         const data = await response.json();
         const choice = data.choices?.[0];
@@ -120,22 +118,21 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
     {
         const apiKey = this.getApiKey( this.defaultEnvVar );
         const payload = this.buildPayload( request, true );
+        const transport = this.resolveTransportOptions( request );
 
-        const response = await fetch( `${this.#baseUrl}/chat/completions`, 
-            {
-                method : 'POST',
-                headers : 
-            {
-                'Content-Type'  : 'application/json',
-                'Authorization' : `Bearer ${apiKey}`
-            },
+        const response = await this.request( {
+            url    : `${this.#baseUrl}/chat/completions`,
+            init   : {
+                method  : 'POST',
+                headers : {
+                    'Content-Type'  : 'application/json',
+                    'Authorization' : `Bearer ${apiKey}`
+                },
                 body : JSON.stringify( payload )
-            } );
-
-        if( !response.ok )
-        {
-            await this.handleErrorResponse( response );
-        }
+            },
+            stream : true,
+            ...transport
+        } );
 
         if( !response.body )
         {
@@ -169,27 +166,36 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
             const finishReason = this.mapFinishReason( choice?.finish_reason );
             const usage = chunkData.usage ? this.parseUsage( chunkData.usage ) : undefined;
 
-            let deltaToolCall: ModelStreamChunk['deltaToolCall'];
-
+            // Yield one chunk per tool-call delta so multi-tool streams are preserved (R11).
             if( delta?.tool_calls && delta.tool_calls.length > 0 )
             {
-                const tc = delta.tool_calls[0];
-                deltaToolCall = 
-                    {
-                        index     : tc.index ?? 0,
-                        id        : tc.id,
-                        name      : tc.function?.name,
-                        arguments : tc.function?.arguments
-                    };
-            }
-
-            yield createStreamChunk( deltaContent, 
+                for( let i = 0; i < delta.tool_calls.length; i++ )
                 {
-                    deltaToolCall,
-                    finishReason,
-                    usage,
-                    raw : chunkData
-                } );
+                    const tc = delta.tool_calls[i];
+
+                    yield createStreamChunk( i === 0 ? deltaContent : '', 
+                        {
+                            deltaToolCall : {
+                                index     : tc.index ?? 0,
+                                id        : tc.id,
+                                name      : tc.function?.name,
+                                arguments : tc.function?.arguments
+                            },
+                            finishReason,
+                            usage,
+                            raw : chunkData
+                        } );
+                }
+            }
+            else
+            {
+                yield createStreamChunk( deltaContent, 
+                    {
+                        finishReason,
+                        usage,
+                        raw : chunkData
+                    } );
+            }
         }
 
         if( !sawDone )

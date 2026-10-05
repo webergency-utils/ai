@@ -61,24 +61,42 @@ export type ModelConfig =
         provider       : string
         model          : string
         apiKey?        : string
+        apiKeyEnvVar?  : string
         baseUrl?       : string
         temperature?   : number
         maxTokens?     : number
         topP?          : number
         systemPrompt?  : string
         vendorOptions? : Record<string, unknown>
+        timeoutMs?     : number
+        idleTimeoutMs? : number
+        maxRetries?    : number
+    }
+
+export type ModelRequestAttemptInfo =
+    {
+        attempt     : number
+        maxAttempts : number
+        error?      : unknown
+        delayMs?    : number
     }
 
 export type ModelRequest =
     {
-        messages      : ChatMessage[]
-        tools?        : ToolDefinition[]
-        toolChoice?   : 'auto' | 'none' | 'required' | { name : string }
-        temperature?  : number
-        maxTokens?    : number
-        systemPrompt? : string
-        stream?       : boolean
-        rawOptions?   : Record<string, unknown>
+        messages       : ChatMessage[]
+        tools?         : ToolDefinition[]
+        toolChoice?    : 'auto' | 'none' | 'required' | { name : string }
+        temperature?   : number
+        maxTokens?     : number
+        systemPrompt?  : string
+        stream?        : boolean
+        rawOptions?    : Record<string, unknown>
+        signal?        : AbortSignal
+        timeoutMs?     : number
+        idleTimeoutMs? : number
+        /** false disables retries; object overrides maxRetries for this call */
+        retry?         : false | { maxRetries? : number }
+        onAttempt?     : ( info: ModelRequestAttemptInfo ) => void
     }
 
 export type ModelResponse =
@@ -87,6 +105,11 @@ export type ModelResponse =
         role         : 'assistant'
         toolCalls?   : ToolCall[]
         usage?       : UsageMetrics
+        /**
+         * True when the provider returned no usage metrics.
+         * Metering must record a spend gap (R2/R57), never treat as free.
+         */
+        usageMissing? : true
         finishReason : 'stop' | 'tool_calls' | 'length' | 'content_filter' | 'error' | 'other'
         raw          : unknown
     }

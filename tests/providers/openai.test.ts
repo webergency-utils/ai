@@ -161,7 +161,8 @@ describe( 'OpenAIProviderAdapter', () =>
         } );
 
         await expect( adapter.generate( {
-            messages : [ { role : 'user', content : 'test' } ]
+            messages : [ { role : 'user', content : 'test' } ],
+            retry    : false
         } ) ).rejects.toThrow( RateLimitError );
     } );
 
@@ -182,14 +183,15 @@ describe( 'OpenAIProviderAdapter', () =>
         } );
 
         await expect( adapter.generate( {
-            messages : [ { role : 'user', content : 'test' } ]
+            messages : [ { role : 'user', content : 'test' } ],
+            retry    : false
         } ) ).rejects.toThrow( ProviderError );
     } );
 
     it( 'should stream SSE chunks with content deltas and tool deltas', async () => 
     {
         const chunk1 = 'data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}\n\n';
-        const chunk2 = 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":"{\\"q\\""}}]},"finish_reason":null}]}\n\n';
+        const chunk2 = 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":"{\\"q\\""}},{"index":1,"id":"call_2","function":{"name":"lookup","arguments":"{\\"id\\""}}]},"finish_reason":null}]}\n\n';
         const chunk3 = 'data: {"choices":[{"delta":{"content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}\n\n';
         const chunkDone = 'data: [DONE]\n\n';
 
@@ -221,7 +223,7 @@ describe( 'OpenAIProviderAdapter', () =>
             chunks.push( chunk );
         }
 
-        expect( chunks ).toHaveLength( 3 );
+        expect( chunks ).toHaveLength( 4 );
         expect( chunks[0].deltaContent ).toBe( 'Hello' );
         expect( chunks[1].deltaToolCall ).toEqual( {
             index     : 0,
@@ -229,8 +231,14 @@ describe( 'OpenAIProviderAdapter', () =>
             name      : 'search',
             arguments : '{"q"'
         } );
-        expect( chunks[2].finishReason ).toBe( 'stop' );
-        expect( chunks[2].usage?.totalTokens ).toBe( 15 );
+        expect( chunks[2].deltaToolCall ).toEqual( {
+            index     : 1,
+            id        : 'call_2',
+            name      : 'lookup',
+            arguments : '{"id"'
+        } );
+        expect( chunks[3].finishReason ).toBe( 'stop' );
+        expect( chunks[3].usage?.totalTokens ).toBe( 15 );
     } );
 
     it( 'throws when the stream ends without [DONE] (AE14)', async () => 
