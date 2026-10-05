@@ -80,7 +80,14 @@ export function pricingKey( provider: string, model: string ): string
 
 export function normalizeBaseUrl( url: string ): string
 {
-    return url.replace( /\/+$/, '' ).toLowerCase();
+    let end = url.length;
+
+    while( end > 0 && url.charCodeAt( end - 1 ) === 47 /* '/' */ )
+    {
+        end -= 1;
+    }
+
+    return url.slice( 0, end ).toLowerCase();
 }
 
 export function isDefaultProviderBaseUrl( provider: string, baseUrl?: string ): boolean
