@@ -5,3 +5,4 @@ export * from './jit-retriever.js';
 export * from './agent.js';
 export * from './events.js';
 export * from './decision.js';
+export * from './guardrails.js';

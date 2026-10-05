@@ -2,7 +2,7 @@ import type { LanguageModel } from '../core/protocol.js';
 import type { ChatMessage, ModelRequest, ModelResponse, ToolCall, ToolDefinition } from '../core/types.js';
 import type { SpendTracker } from '../spend/tracker.js';
 import type { CategorySpendBreakdown } from '../spend/types.js';
-import { AIError, BudgetRefusedError, CancelledError } from '../core/error.js';
+import { AIError, BudgetRefusedError, CancelledError, GuardrailTripwireError, type GuardrailStage } from '../core/error.js';
 import { finalizeStream } from '../core/tool-stream.js';
 import type { Tool } from './tool.js';
 import type { CheckpointManager, AgentRunStatus, PendingToolCall } from './checkpoint.js';
@@ -12,6 +12,7 @@ import type { Span } from '../trace/types.js';
 import type { TraceCollector } from '../trace/collector.js';
 import { createMeteredModel } from '../providers/metered.js';
 import { runOrdered } from './concurrency.js';
+import { assertGuardrailConfig, runGuardrails, type AgentGuardrails, type GuardrailVerdict } from './guardrails.js';
 import { EventChannel, type AgentEmit, type AgentEvent } from './events.js';
 
 export interface AgentConfig
@@ -22,6 +23,8 @@ export interface AgentConfig
     maxIterations?     : number
     /** Tool calls of one model turn that may run at once (default 1 = sequential). */
     toolConcurrency?   : number
+    /** Input / tool / output checks; a trip throws `GuardrailTripwireError` and saves status `blocked`. */
+    guardrails?        : AgentGuardrails
     checkpointManager? : CheckpointManager
     spendTracker?      : SpendTracker
     jitRetriever?      : JITToolRetriever
@@ -53,6 +56,13 @@ export interface AgentResult
     span?          : Span
 }
 
+interface RunScope
+{
+    threadId : string
+    runId    : string
+    agentId  : string
+}
+
 interface ToolOutcome
 {
     content : string
@@ -68,6 +78,20 @@ interface StepResponse
     finishReason?     : ModelResponse['finishReason']
     /** Model-category spend recorded by the metered model during this call. */
     spendDeltaUSD     : number
+}
+
+/** Index of the last assistant message that issued tool calls, or -1. */
+function lastToolTurn( messages: ChatMessage[] ): number
+{
+    for( let i = messages.length - 1; i >= 0; i-- )
+    {
+        if( messages[ i ]!.role === 'assistant' && ( messages[ i ]!.toolCalls?.length ?? 0 ) > 0 )
+        {
+            return i;
+        }
+    }
+
+    return -1;
 }
 
 function newId( prefix: string ): string
@@ -107,6 +131,7 @@ export class Agent
     readonly #tools             : Tool[];
     readonly #maxIterations     : number;
     readonly #toolConcurrency   : number;
+    readonly #guardrails        : AgentGuardrails;
     readonly #checkpointManager?: CheckpointManager;
     readonly #spendTracker?     : SpendTracker;
     readonly #jitRetriever?     : JITToolRetriever;
@@ -119,6 +144,9 @@ export class Agent
         this.#tools = config.tools ?? [];
         this.#maxIterations = config.maxIterations ?? 10;
         this.#toolConcurrency = config.toolConcurrency ?? 1;
+        this.#guardrails = config.guardrails ?? {};
+
+        assertGuardrailConfig( this.#guardrails );
 
         if( !Number.isInteger( this.#toolConcurrency ) || this.#toolConcurrency < 1 )
         {
@@ -433,6 +461,8 @@ export class Agent
         let completedToolIds: string[] = [];
         let status: AgentRunStatus = 'running';
         let finalText = '';
+        /** Length of `messages` a `blocked` checkpoint rolls back to (never leaves dangling tool calls). */
+        let safeLength = 0;
 
         if( hydrate && checkpoint )
         {
@@ -442,6 +472,10 @@ export class Agent
             sequence = checkpoint.sequence;
             pendingToolCalls = checkpoint.pendingToolCalls ? [ ...checkpoint.pendingToolCalls ] : [];
             completedToolIds = checkpoint.completedToolIds ? [ ...checkpoint.completedToolIds ] : [];
+
+            const openTurn = pendingToolCalls.length > 0 ? lastToolTurn( messages ) : -1;
+
+            safeLength = openTurn >= 0 ? openTurn : messages.length;
         }
         else
         {
@@ -449,12 +483,14 @@ export class Agent
             {
                 const latest = await this.#checkpointManager.getLatestCheckpoint( options.threadId );
 
-                if( latest && ( latest.status === 'completed' || latest.status === 'abandoned' || latest.status === 'step_limit' ) )
+                if( latest && ( latest.status === 'completed' || latest.status === 'abandoned' || latest.status === 'step_limit' || latest.status === 'blocked' ) )
                 {
                     messages = [ ...latest.messages ];
                     totalSpendUSD = latest.spendUSD;
                 }
             }
+
+            safeLength = messages.length;
 
             if( typeof input === 'string' )
             {
@@ -465,6 +501,9 @@ export class Agent
                 messages.push( ...input );
             }
         }
+
+        const inputMessages = messages.slice( safeLength );
+        const scope: RunScope = { threadId, runId, agentId };
 
         let activeTools = this.#tools;
 
@@ -537,6 +576,16 @@ export class Agent
 
                 try
                 {
+                    if( !hydrate )
+                    {
+                        this.#enforce( 
+                            'input', 
+                            await runGuardrails( 'input', this.#guardrails.input, { messages : inputMessages }, { ...scope, context : runCtx, signal } ) 
+                        );
+
+                        safeLength = messages.length;
+                    }
+
                     // Resume mid-batch: finish pending tools that are not yet completed.
                     if( hydrate && pendingToolCalls.length > 0 )
                     {
@@ -544,9 +593,10 @@ export class Agent
                             ( tc ) => {return !completedToolIds.includes( tc.id );} 
                         );
 
-                        await this.#executeTools( remaining, toolMap, runCtx, signal, commitTool );
+                        await this.#executeTools( remaining, toolMap, runCtx, signal, scope, commitTool );
 
                         pendingToolCalls = [];
+                        safeLength = messages.length;
                         await save( 'running' );
                     }
 
@@ -607,16 +657,22 @@ export class Agent
                                     // Calls already committed (by id) are skipped, matching the checkpoint resume contract.
                                     await this.#executeTools( 
                                         pendingToolCalls.filter( ( tc ) => {return !completedToolIds.includes( tc.id );} ), 
-                                        toolMap, stepCtx, signal, commitTool 
+                                        toolMap, stepCtx, signal, scope, commitTool 
                                     );
 
                                     pendingToolCalls = [];
+                                    safeLength = messages.length;
                                     await save( 'running' );
 
                                     emit( { type : 'step:finish', step : stepIndex, usage : response.usage, finishReason : response.finishReason, toolCalls : toolCalls.length } );
 
                                     return true;
                                 }
+
+                                this.#enforce( 
+                                    'output', 
+                                    await runGuardrails( 'output', this.#guardrails.output, { text : response.content }, { ...scope, context : stepCtx, signal } ) 
+                                );
 
                                 finalText = response.content;
                                 messages.push( { role : 'assistant', content : finalText } );
@@ -658,6 +714,14 @@ export class Agent
                 }
                 catch( err )
                 {
+                    if( err instanceof GuardrailTripwireError )
+                    {
+                        messages = messages.slice( 0, safeLength );
+                        pendingToolCalls = [];
+                        await save( 'blocked' );
+                        throw err;
+                    }
+
                     if( err instanceof CancelledError || signal.aborted )
                     {
                         await save( 'interrupted' );
@@ -817,6 +881,7 @@ export class Agent
         toolMap: Map<string, Tool>, 
         runCtx: ExecutionContext,
         signal: AbortSignal,
+        scope: RunScope,
         commit: ( tc: PendingToolCall, outcome: ToolOutcome ) => Promise<void>
     ): Promise<void>
     {
@@ -824,16 +889,26 @@ export class Agent
             limit   : this.#toolConcurrency,
             signal,
             barrier : ( tc ) => {return toolMap.get( tc.name )?.parallelSafe === false;},
-            run     : ( tc, _index, batchSignal ) => {return this.#runOneTool( tc, toolMap, runCtx, batchSignal );},
+            run     : ( tc, _index, batchSignal ) => {return this.#runOneTool( tc, toolMap, runCtx, batchSignal, scope );},
             commit  : ( tc, outcome ) => {return commit( tc, outcome );}
         } );
+    }
+
+    /** Turns a guardrail verdict into a thrown tripwire; input / output denies and `tripwire` denies always trip. */
+    #enforce( stage: GuardrailStage, verdict: GuardrailVerdict ): void
+    {
+        if( !verdict.allow )
+        {
+            throw new GuardrailTripwireError( stage, verdict.reason );
+        }
     }
 
     async #runOneTool( 
         tc: PendingToolCall, 
         toolMap: Map<string, Tool>, 
         runCtx: ExecutionContext,
-        signal: AbortSignal
+        signal: AbortSignal,
+        scope: RunScope
     ): Promise<ToolOutcome>
     {
         const tool = toolMap.get( tc.name );
@@ -842,6 +917,16 @@ export class Agent
         {
             return { content : `Error: Tool '${tc.name}' not found`, isError : true };
         }
+
+        const guardCtx = { ...scope, context : runCtx, signal };
+        const pre = await runGuardrails( 'toolCall', this.#guardrails.toolCall, { id : tc.id, name : tc.name, arguments : tc.arguments }, guardCtx );
+
+        if( !pre.allow )
+        {
+            return this.#blockedTool( 'toolCall', pre );
+        }
+
+        let outcome: ToolOutcome;
 
         try
         {
@@ -861,11 +946,26 @@ export class Agent
                 } 
             );
 
-            return { content : typeof res === 'string' ? res : JSON.stringify( res ), isError : false };
+            outcome = { content : typeof res === 'string' ? res : JSON.stringify( res ), isError : false };
         }
         catch( err: unknown )
         {
-            return { content : classifyToolError( err ), isError : true };
+            outcome = { content : classifyToolError( err ), isError : true };
         }
+
+        const post = await runGuardrails( 'toolResult', this.#guardrails.toolResult, { id : tc.id, name : tc.name, arguments : tc.arguments, result : outcome.content }, guardCtx );
+
+        return post.allow ? outcome : this.#blockedTool( 'toolResult', post );
+    }
+
+    /** A non-tripwire deny is model-visible; a tripwire deny ends the run. */
+    #blockedTool( stage: GuardrailStage, verdict: Extract<GuardrailVerdict, { allow: false }> ): ToolOutcome
+    {
+        if( verdict.tripwire )
+        {
+            throw new GuardrailTripwireError( stage, verdict.reason );
+        }
+
+        return { content : `Error: blocked by guardrail: ${verdict.reason}`, isError : true };
     }
 }

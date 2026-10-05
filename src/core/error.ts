@@ -237,3 +237,29 @@ export class PathEscapeError extends AIError
     }
 }
 
+
+export type GuardrailStage = 'input' | 'toolCall' | 'toolResult' | 'output';
+
+/** Thrown when a guardrail denies a run (input / output, or any `tripwire` deny) or itself throws (fail closed). */
+export class GuardrailTripwireError extends AIError
+{
+    public readonly stage  : GuardrailStage;
+    public readonly reason : string;
+
+    constructor( stage: GuardrailStage, reason: string, cause?: unknown )
+    {
+        super( 
+            `Guardrail tripped at '${stage}': ${reason}`, 
+            'AGENT_GUARDRAIL_TRIPPED', 
+            { stage, reason, ...( cause !== undefined ? { cause : cause instanceof Error ? `${cause.name}: ${cause.message}` : String( cause ) } : {} ) } 
+        );
+        this.name = 'GuardrailTripwireError';
+        this.stage = stage;
+        this.reason = reason;
+
+        if( cause !== undefined )
+        {
+            this.cause = cause;
+        }
+    }
+}
