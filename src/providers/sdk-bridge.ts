@@ -1,6 +1,6 @@
-import type { ModelProtocol } from '../core/protocol.js';
+import { NO_CAPABILITIES, type LanguageModel } from '../core/protocol.js';
 import type { ModelRequest, ModelResponse, ModelStreamChunk, UsageMetrics } from '../core/types.js';
-import { MissingDependencyError, ProviderError } from '../core/error.js';
+import { CapabilityError, MissingDependencyError, ProviderError } from '../core/error.js';
 
 type AnyFn = ( ...args: unknown[] ) => unknown;
 
@@ -91,7 +91,7 @@ function finalizeBridgeResponse(
     };
 }
 
-export class SDKBridgeAdapter implements ModelProtocol
+export class SDKBridgeAdapter implements LanguageModel
 {
     public readonly provider : string;
     public readonly model    : string;
@@ -109,9 +109,17 @@ export class SDKBridgeAdapter implements ModelProtocol
         return this.#client;
     }
 
+    /** The SDK bridge is text-only; structured output, cache control, and attachments are deferred. */
+    public get capabilities(): typeof NO_CAPABILITIES
+    {
+        return NO_CAPABILITIES;
+    }
+
     public async generate( request: ModelRequest ): Promise<ModelResponse>
     {
         const norm = this.provider.toLowerCase();
+
+        this.#assertSupported( request );
 
         if( norm === 'openai' )
         {
@@ -134,6 +142,27 @@ export class SDKBridgeAdapter implements ModelProtocol
         }
 
         throw new ProviderError( this.provider, `Unsupported SDK bridge provider '${this.provider}'` );
+    }
+
+    #assertSupported( request: ModelRequest ): void
+    {
+        if( request.outputSchema )
+        {
+            throw new CapabilityError( this.provider, 'structuredOutput', 'SDK bridge does not support outputSchema; use the native adapter' );
+        }
+
+        for( const msg of request.messages )
+        {
+            if( msg.cacheControl )
+            {
+                throw new CapabilityError( this.provider, 'promptCacheControl', 'SDK bridge does not support cacheControl' );
+            }
+
+            if( msg.attachments && msg.attachments.length > 0 )
+            {
+                throw new CapabilityError( this.provider, `multimodal.${msg.attachments[ 0 ].type}`, 'SDK bridge does not support attachments' );
+            }
+        }
     }
 
     public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
@@ -303,7 +332,7 @@ export class SDKBridgeAdapter implements ModelProtocol
     }
 }
 
-export function createSDKBridge( provider: string, model: string, client: unknown ): ModelProtocol
+export function createSDKBridge( provider: string, model: string, client: unknown ): LanguageModel
 {
     return new SDKBridgeAdapter( provider, model, client );
 }

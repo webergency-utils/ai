@@ -1,5 +1,6 @@
 import { BaseProviderAdapter } from './base.js';
 import type { 
+    ModelCapabilities,
     ModelConfig, 
     ModelRequest, 
     ModelResponse, 
@@ -50,8 +51,26 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
         this.#baseUrl = config.baseUrl ?? 'https://api.anthropic.com';
     }
 
+    protected override get defaultCapabilities(): ModelCapabilities
+    {
+        return {
+            structuredOutput   : true,
+            embeddings         : false,
+            reasoningContent   : false,
+            promptCacheControl : true,
+            multimodal         : { image : true, audio : false, video : false, document : true }
+        };
+    }
+
+    protected override get supportsMessageCacheControl(): boolean
+    {
+        return true;
+    }
+
     public async generate( request: ModelRequest ): Promise<ModelResponse>
     {
+        this.assertRequestSupported( request );
+
         const apiKey = this.getApiKey( 'ANTHROPIC_API_KEY' );
         const payload = this.buildPayload( request, false );
         const transport = this.resolveTransportOptions( request );
@@ -110,6 +129,8 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
 
     public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
     {
+        this.assertRequestSupported( request );
+
         const apiKey = this.getApiKey( 'ANTHROPIC_API_KEY' );
         const payload = this.buildPayload( request, true );
         const transport = this.resolveTransportOptions( request );

@@ -1,5 +1,5 @@
-import type { ModelProtocol } from '../core/protocol.js';
-import type { ModelRequest, ModelResponse, ModelStreamChunk } from '../core/types.js';
+import { getCapabilities, type LanguageModel } from '../core/protocol.js';
+import type { ModelCapabilities, ModelRequest, ModelResponse, ModelStreamChunk } from '../core/types.js';
 import type { SpendTracker } from '../spend/tracker.js';
 import type { Span } from '../trace/types.js';
 
@@ -15,19 +15,19 @@ export interface MeteredModelOptions
 }
 
 /**
- * Metering wrapper around ModelProtocol (KTD2).
+ * Metering wrapper around LanguageModel (KTD2).
  * Pre-checks model budgets / unpriced caps, records usage or gaps, observes retries.
  */
-export class MeteredModel implements ModelProtocol
+export class MeteredModel implements LanguageModel
 {
-    readonly #inner   : ModelProtocol;
+    readonly #inner   : LanguageModel;
     readonly #tracker : SpendTracker;
     readonly #baseUrl?: string;
     readonly #getSpan?: () => Span | undefined;
     readonly #threadId?: string;
     readonly #agentId?: string;
 
-    constructor( inner: ModelProtocol, options: MeteredModelOptions )
+    constructor( inner: LanguageModel, options: MeteredModelOptions )
     {
         this.#inner = inner;
         this.#tracker = options.tracker;
@@ -47,7 +47,12 @@ export class MeteredModel implements ModelProtocol
         return this.#inner.model;
     }
 
-    public get inner(): ModelProtocol
+    public get capabilities(): ModelCapabilities
+    {
+        return getCapabilities( this.#inner );
+    }
+
+    public get inner(): LanguageModel
     {
         return this.#inner;
     }
@@ -190,7 +195,7 @@ export class MeteredModel implements ModelProtocol
 }
 
 export function createMeteredModel( 
-    inner: ModelProtocol, 
+    inner: LanguageModel, 
     options: MeteredModelOptions 
 ): MeteredModel
 {

@@ -1,5 +1,5 @@
 import { OpenAIProviderAdapter } from './openai.js';
-import type { ModelConfig } from '../core/types.js';
+import type { ModelCapabilities, ModelConfig } from '../core/types.js';
 
 export class DeepSeekProviderAdapter extends OpenAIProviderAdapter
 {
@@ -15,5 +15,21 @@ export class DeepSeekProviderAdapter extends OpenAIProviderAdapter
     protected override get defaultEnvVar(): string
     {
         return 'DEEPSEEK_API_KEY';
+    }
+
+    protected override get defaultCapabilities(): ModelCapabilities
+    {
+        return {
+            structuredOutput   : true,
+            embeddings         : false,
+            reasoningContent   : true,
+            promptCacheControl : false,
+            multimodal         : { image : false, audio : false, video : false, document : false }
+        };
+    }
+
+    protected override get supportsPromptCacheKey(): boolean
+    {
+        return false;
     }
 }

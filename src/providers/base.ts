@@ -1,7 +1,18 @@
-import type { ModelProtocol } from '../core/protocol.js';
-import type { ModelConfig, ModelRequest, ModelResponse, ModelStreamChunk } from '../core/types.js';
+import type { LanguageModel } from '../core/protocol.js';
+import { NO_CAPABILITIES } from '../core/protocol.js';
+import type { 
+    AttachmentType, 
+    ModelCapabilities, 
+    ModelConfig, 
+    ModelRequest, 
+    ModelResponse, 
+    ModelStreamChunk 
+} from '../core/types.js';
+import { WarningEmitter, type WarningEvent, type WarningListener } from '../core/warning.js';
 import { 
     CancelledError, 
+    CapabilityError, 
+    InvalidInputError, 
     ProviderError, 
     QuotaExceededError, 
     RateLimitError, 
@@ -131,11 +142,12 @@ function isTimeoutAbort( signal: AbortSignal | undefined, error: unknown ): bool
             && reason.name === 'TimeoutError' );
 }
 
-export abstract class BaseProviderAdapter implements ModelProtocol
+export abstract class BaseProviderAdapter implements LanguageModel
 {
     public readonly provider : string;
     public readonly model    : string;
     readonly #config         : ModelConfig;
+    readonly #warnings       = new WarningEmitter();
 
     constructor( config: ModelConfig )
     {
@@ -147,6 +159,115 @@ export abstract class BaseProviderAdapter implements ModelProtocol
     public get config(): ModelConfig
     {
         return this.#config;
+    }
+
+    /** Provider defaults; subclasses override. Config `capabilities` is merged on top. */
+    protected get defaultCapabilities(): ModelCapabilities
+    {
+        return NO_CAPABILITIES;
+    }
+
+    public get capabilities(): ModelCapabilities
+    {
+        const base = this.defaultCapabilities;
+        const override = this.#config.capabilities;
+
+        if( !override )
+        {
+            return base;
+        }
+
+        return {
+            ...base,
+            ...override,
+            multimodal : { ...base.multimodal, ...( override.multimodal ?? {} ) }
+        } as ModelCapabilities;
+    }
+
+    /** True when message-level `cacheControl` breakpoints map to the wire format. */
+    protected get supportsMessageCacheControl(): boolean
+    {
+        return false;
+    }
+
+    /** True when request-level `promptCacheKey` maps to the wire format. */
+    protected get supportsPromptCacheKey(): boolean
+    {
+        return false;
+    }
+
+    /** Subscribe to adapter warnings (e.g. documented capability gaps). */
+    public onWarning( listener: WarningListener ): () => void
+    {
+        return this.#warnings.on( listener );
+    }
+
+    protected emitWarning( event: WarningEvent ): void
+    {
+        this.#warnings.emit( event );
+    }
+
+    /**
+     * Pre-flight capability gate. Runs before any HTTP so unsupported
+     * requests never silently degrade (R7, R25, R28).
+     */
+    protected assertRequestSupported( request: ModelRequest ): void
+    {
+        const caps = this.capabilities;
+
+        if( request.outputSchema && !caps.structuredOutput )
+        {
+            throw new CapabilityError( 
+                this.provider, 
+                'structuredOutput', 
+                `model '${this.model}' cannot honor outputSchema` 
+            );
+        }
+
+        for( const msg of request.messages )
+        {
+            if( msg.cacheControl && !( caps.promptCacheControl && this.supportsMessageCacheControl ) )
+            {
+                throw new CapabilityError( 
+                    this.provider, 
+                    'promptCacheControl', 
+                    'message cacheControl is not supported' 
+                );
+            }
+
+            if( msg.reasoningContent !== undefined && msg.role !== 'assistant' )
+            {
+                throw new InvalidInputError( 
+                    `reasoningContent is only valid on assistant messages (got '${msg.role}')` 
+                );
+            }
+
+            for( const att of msg.attachments ?? [] )
+            {
+                this.assertAttachmentSupported( att.type );
+            }
+        }
+
+        if( request.promptCacheKey && !( caps.promptCacheControl && this.supportsPromptCacheKey ) )
+        {
+            throw new CapabilityError( 
+                this.provider, 
+                'promptCacheControl', 
+                'promptCacheKey is not supported' 
+            );
+        }
+    }
+
+    protected assertAttachmentSupported( type: AttachmentType ): void
+    {
+        if( !this.capabilities.multimodal[type] )
+        {
+            throw new CapabilityError( 
+                this.provider, 
+                `multimodal.${type}`, 
+                `attachment type '${type}' is not supported by ${this.provider}` 
+            );
+        }
     }
 
     public abstract generate( request: ModelRequest ): Promise<ModelResponse>;

@@ -1,5 +1,6 @@
 import { BaseProviderAdapter } from './base.js';
 import type { 
+    ModelCapabilities,
     ModelConfig, 
     ModelRequest, 
     ModelResponse, 
@@ -64,8 +65,21 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
         this.#baseUrl = config.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta';
     }
 
+    protected override get defaultCapabilities(): ModelCapabilities
+    {
+        return {
+            structuredOutput   : true,
+            embeddings         : true,
+            reasoningContent   : false,
+            promptCacheControl : false,
+            multimodal         : { image : true, audio : true, video : true, document : true }
+        };
+    }
+
     public async generate( request: ModelRequest ): Promise<ModelResponse>
     {
+        this.assertRequestSupported( request );
+
         const apiKey = this.getApiKey( 'GEMINI_API_KEY' );
         const payload = this.buildPayload( request );
         const transport = this.resolveTransportOptions( request );
@@ -132,6 +146,8 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
 
     public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
     {
+        this.assertRequestSupported( request );
+
         const apiKey = this.getApiKey( 'GEMINI_API_KEY' );
         const payload = this.buildPayload( request );
         const transport = this.resolveTransportOptions( request );

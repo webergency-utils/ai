@@ -67,6 +67,24 @@ export class InvalidInputError extends AIError
     }
 }
 
+export class CapabilityError extends AIError
+{
+    public readonly provider   : string;
+    public readonly capability : string;
+
+    constructor( provider: string, capability: string, message?: string, details?: unknown )
+    {
+        super( 
+            `[${provider}] Unsupported capability '${capability}'${message ? `: ${message}` : ''}`, 
+            'UNSUPPORTED_CAPABILITY', 
+            { provider, capability, ...( details && typeof details === 'object' ? details as object : {} ) } 
+        );
+        this.name = 'CapabilityError';
+        this.provider = provider;
+        this.capability = capability;
+    }
+}
+
 export class BudgetExceededError extends AIError
 {
     public readonly currentSpendUSD : number;

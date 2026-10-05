@@ -1,5 +1,6 @@
 import { BaseProviderAdapter } from './base.js';
 import type { 
+    ModelCapabilities,
     ModelConfig, 
     ModelRequest, 
     ModelResponse, 
@@ -46,8 +47,21 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
         this.#baseUrl = config.baseUrl ?? 'http://127.0.0.1:11434';
     }
 
+    protected override get defaultCapabilities(): ModelCapabilities
+    {
+        return {
+            structuredOutput   : true,
+            embeddings         : true,
+            reasoningContent   : false,
+            promptCacheControl : false,
+            multimodal         : { image : true, audio : false, video : false, document : false }
+        };
+    }
+
     public async generate( request: ModelRequest ): Promise<ModelResponse>
     {
+        this.assertRequestSupported( request );
+
         const payload = this.buildPayload( request, false );
         const transport = this.resolveTransportOptions( request );
 
@@ -79,6 +93,8 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
 
     public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
     {
+        this.assertRequestSupported( request );
+
         const payload = this.buildPayload( request, true );
         const transport = this.resolveTransportOptions( request );
 

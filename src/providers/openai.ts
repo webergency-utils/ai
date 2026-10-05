@@ -1,5 +1,6 @@
 import { BaseProviderAdapter } from './base.js';
 import type { 
+    ModelCapabilities,
     ModelConfig, 
     ModelRequest, 
     ModelResponse, 
@@ -77,8 +78,26 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
         return 'OPENAI_API_KEY';
     }
 
+    protected override get defaultCapabilities(): ModelCapabilities
+    {
+        return {
+            structuredOutput   : true,
+            embeddings         : true,
+            reasoningContent   : true,
+            promptCacheControl : true,
+            multimodal         : { image : true, audio : true, video : false, document : true }
+        };
+    }
+
+    protected override get supportsPromptCacheKey(): boolean
+    {
+        return true;
+    }
+
     public async generate( request: ModelRequest ): Promise<ModelResponse>
     {
+        this.assertRequestSupported( request );
+
         const apiKey = this.getApiKey( this.defaultEnvVar );
         const payload = this.buildPayload( request, false );
         const transport = this.resolveTransportOptions( request );
@@ -116,6 +135,8 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
 
     public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
     {
+        this.assertRequestSupported( request );
+
         const apiKey = this.getApiKey( this.defaultEnvVar );
         const payload = this.buildPayload( request, true );
         const transport = this.resolveTransportOptions( request );

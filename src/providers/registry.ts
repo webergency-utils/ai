@@ -1,4 +1,4 @@
-import type { ModelProtocol } from '../core/protocol.js';
+import type { LanguageModel } from '../core/protocol.js';
 import type { ModelConfig } from '../core/types.js';
 import { ProviderError } from '../core/error.js';
 import { OpenAIProviderAdapter } from './openai.js';
@@ -9,7 +9,7 @@ import { OllamaProviderAdapter } from './ollama.js';
 import { DeepSeekProviderAdapter } from './deepseek.js';
 import { MistralProviderAdapter } from './mistral.js';
 
-export type ProviderFactory = ( config: ModelConfig ) => ModelProtocol;
+export type ProviderFactory = ( config: ModelConfig ) => LanguageModel;
 
 function configCacheKey( config: ModelConfig ): string
 {
@@ -21,7 +21,7 @@ function configCacheKey( config: ModelConfig ): string
 export class ModelRegistry
 {
     readonly #factories = new Map<string, ProviderFactory>();
-    readonly #cache     = new Map<string, ModelProtocol>();
+    readonly #cache     = new Map<string, LanguageModel>();
 
     constructor()
     {
@@ -38,7 +38,7 @@ export class ModelRegistry
         return this.#factories.has( providerId.toLowerCase() );
     }
 
-    public create( config: ModelConfig ): ModelProtocol
+    public create( config: ModelConfig ): LanguageModel
     {
         const providerId = config.provider.toLowerCase();
         const factory = this.#factories.get( providerId );
@@ -64,7 +64,7 @@ export class ModelRegistry
         return adapter;
     }
 
-    public resolve( providerId: string, config: Omit<ModelConfig, 'provider'> ): ModelProtocol
+    public resolve( providerId: string, config: Omit<ModelConfig, 'provider'> ): LanguageModel
     {
         return this.create( {
             ...config,
@@ -118,7 +118,7 @@ export class ModelRegistry
 
 export const defaultRegistry = new ModelRegistry();
 
-export function createModel( config: ModelConfig ): ModelProtocol
+export function createModel( config: ModelConfig ): LanguageModel
 {
     return defaultRegistry.create( config );
 }
