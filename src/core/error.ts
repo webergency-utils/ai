@@ -91,3 +91,109 @@ export class BudgetExceededError extends AIError
     }
 }
 
+export class TimeoutError extends AIError
+{
+    public readonly phase     : 'total' | 'idle';
+    public readonly timeoutMs : number;
+    public readonly attempt?  : number;
+
+    constructor( 
+        message: string, 
+        phase: 'total' | 'idle', 
+        timeoutMs: number, 
+        attempt?: number, 
+        details?: unknown 
+    )
+    {
+        super( message, 'TIMEOUT', { phase, timeoutMs, attempt, ...( details && typeof details === 'object' ? details as object : { details } ) } );
+        this.name = 'TimeoutError';
+        this.phase = phase;
+        this.timeoutMs = timeoutMs;
+        this.attempt = attempt;
+    }
+}
+
+export class CancelledError extends AIError
+{
+    public readonly cause? : unknown;
+
+    constructor( message: string = 'Operation cancelled', cause?: unknown )
+    {
+        super( message, 'CANCELLED', { cause } );
+        this.name = 'CancelledError';
+        this.cause = cause;
+    }
+}
+
+export class QuotaExceededError extends AIError
+{
+    public readonly provider   : string;
+    public readonly statusCode : number;
+
+    constructor( provider: string, message: string = 'Quota or billing limit exceeded', details?: unknown )
+    {
+        super( `[${provider}] ${message}`, 'QUOTA_EXCEEDED', details );
+        this.name = 'QuotaExceededError';
+        this.provider = provider;
+        this.statusCode = 429;
+    }
+}
+
+export class BudgetRefusedError extends AIError
+{
+    public readonly reason : 'exhausted' | 'unpriced';
+    public readonly provider? : string;
+    public readonly model?    : string;
+
+    constructor( 
+        reason: 'exhausted' | 'unpriced', 
+        message: string, 
+        opts: { provider?: string, model?: string } = {} 
+    )
+    {
+        super( 
+            message, 
+            reason === 'unpriced' ? 'UNPRICED_MODEL' : 'BUDGET_REFUSED', 
+            { reason, ...opts } 
+        );
+        this.name = 'BudgetRefusedError';
+        this.reason = reason;
+        this.provider = opts.provider;
+        this.model = opts.model;
+    }
+}
+
+export class DimensionMismatchError extends AIError
+{
+    public readonly expected : number;
+    public readonly actual   : number;
+
+    constructor( expected: number, actual: number )
+    {
+        super( 
+            `Vector dimension mismatch: expected ${expected}, got ${actual}`, 
+            'DIMENSION_MISMATCH', 
+            { expected, actual } 
+        );
+        this.name = 'DimensionMismatchError';
+        this.expected = expected;
+        this.actual = actual;
+    }
+}
+
+export class PathEscapeError extends AIError
+{
+    public readonly path : string;
+
+    constructor( path: string, message?: string )
+    {
+        super( 
+            message ?? `Path escapes store root: ${path}`, 
+            'PATH_ESCAPE', 
+            { path } 
+        );
+        this.name = 'PathEscapeError';
+        this.path = path;
+    }
+}
+

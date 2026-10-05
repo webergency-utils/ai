@@ -1,5 +1,6 @@
 import type { UsageMetrics } from '../core/types.js';
 import { BudgetExceededError } from '../core/error.js';
+import type { WarningEvent } from '../core/warning.js';
 import type { ModelPricing } from './pricing.js';
 import { type SpendDetails, SpendCalculator, defaultSpendCalculator } from './calculator.js';
 import 
@@ -20,8 +21,9 @@ export interface SpendTrackerOptions
     unitPricingRegistry? : UnitCostRegistry
 }
 
-export interface SpendWarningEvent
+export interface SpendWarningEvent extends WarningEvent
 {
+    code         : 'budget_threshold' | 'unpriced_usage' | 'budget_exceeded' | string
     category     : SpendCategory | 'total'
     currentSpend : number
     budgetLimit  : number
@@ -238,6 +240,8 @@ export class SpendTracker
             if( prevCat < warnCap && newCat >= warnCap )
             {
                 this.#emitWarning( {
+                    code         : 'budget_threshold',
+                    message      : `Category '${category}' spend reached ${this.#warningThreshold * 100}% of its budget`,
                     category,
                     currentSpend : newCat,
                     budgetLimit  : catLimit,
@@ -259,6 +263,8 @@ export class SpendTracker
             if( prevTotal < warnCap && newTotal >= warnCap )
             {
                 this.#emitWarning( {
+                    code         : 'budget_threshold',
+                    message      : `Total spend reached ${this.#warningThreshold * 100}% of its budget`,
                     category     : 'total',
                     currentSpend : newTotal,
                     budgetLimit  : this.#maxBudgetUSD,

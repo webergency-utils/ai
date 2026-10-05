@@ -149,6 +149,13 @@ export type TraceEvent =
     | { type : 'trace:end', trace : Trace }
     | { type : 'trace:complete', trace : Trace };
 
+export interface TraceWarningEvent
+{
+    code     : string
+    message  : string
+    details? : unknown
+}
+
 export interface TraceEvents
 {
     'span:start'    : ( span: Span ) => void
@@ -156,4 +163,5 @@ export interface TraceEvents
     'trace:start'   : ( trace: Trace ) => void
     'trace:end'     : ( trace: Trace ) => void
     'trace:complete': ( trace: Trace ) => void
+    'warning'       : ( event: TraceWarningEvent ) => void
 }
