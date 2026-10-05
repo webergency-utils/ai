@@ -1,3 +1,5 @@
+import type { DecisionInput, DecisionModel, DecisionQuestions } from '../core/decision.js';
+
 export interface StepContext
 {
     runId       : string
@@ -11,7 +13,7 @@ export interface StepContext
 export type StepHandler<TIn = unknown, TOut = unknown> = 
     ( input: TIn, context: StepContext ) => Promise<TOut>;
 
-export type NodeType = 'step' | 'wait' | 'condition' | 'route';
+export type NodeType = 'step' | 'wait' | 'condition' | 'route' | 'decision';
 
 export interface BaseNode
 {
@@ -50,4 +52,22 @@ export interface RouteNode extends BaseNode
     branches : Record<string, string>
 }
 
-export type WorkflowNode = StepNode | WaitNode | ConditionNode | RouteNode;
+/**
+ * Asks one decision model several questions in a single call, then routes to exactly one
+ * named branch. Types are erased here; {@link Workflow.decision} keeps them at the call site.
+ */
+export interface DecisionNode extends BaseNode
+{
+    type      : 'decision'
+    model     : DecisionModel
+    questions : DecisionQuestions
+    input     : DecisionInput | ( ( input: unknown, context: StepContext ) => DecisionInput | Promise<DecisionInput> )
+    route     : ( answers: never, context: StepContext ) => string | Promise<string>
+    /** Branch name to target node id. */
+    branches  : Record<string, string>
+    /** Re-asks on failure; the workflow retry policy governs, so transport retries are off. */
+    retries   : number
+    timeoutMs? : number
+}
+
+export type WorkflowNode = StepNode | WaitNode | ConditionNode | RouteNode | DecisionNode;

@@ -8,7 +8,8 @@ export interface TracedDecisionOptions
     /** Meters spend and records it on the span, like language-model calls. */
     tracker?  : SpendTracker
     /** Span name; defaults to `model:decide`. */
-    name?     : string
+    name?       : string
+    attributes? : Record<string, string | number | boolean>
 }
 
 /**
@@ -28,6 +29,7 @@ export async function decideWithContext<Q extends DecisionQuestions>(
         {
             span.setAttribute( 'model.provider', model.provider );
             span.setAttribute( 'model.name', model.model );
+            span.setAttributes( options.attributes ?? {} );
             span.setAttribute( 'decision.questions', Object.keys( request.questions ).length );
 
             const metered = options.tracker 

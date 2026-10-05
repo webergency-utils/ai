@@ -1,4 +1,9 @@
 import { AIError } from '../core/error.js';
+import type { DecisionResponse } from '../core/decision.js';
+import type { ExecutionContext } from '../agent/context.js';
+import { decideWithContext } from '../agent/decision.js';
+import type { SpendTracker } from '../spend/tracker.js';
+import { createMeteredDecisionModel } from '../providers/metered.js';
 import type { IDocumentStore } from '../storage/document.js';
 import type { Workflow } from './workflow.js';
 import type { 
@@ -6,6 +11,7 @@ import type {
     StepNode, 
     ConditionNode, 
     RouteNode,
+    DecisionNode,
     WorkflowNode
 } from './nodes.js';
 import { WorkflowEventEmitter, type WorkflowEvent, type WorkflowEventListener } from './events.js';
@@ -49,6 +55,10 @@ export interface WorkflowRunnerOptions
 {
     checkpointStore? : IDocumentStore
     collection?      : string
+    /** Decision steps run inside a `model` span of this context, so they appear in traces. */
+    context?         : ExecutionContext
+    /** Meters decision-step spend (Jev: input tokens only). */
+    tracker?         : SpendTracker
 }
 
 interface PendingWait
@@ -127,6 +137,8 @@ export class WorkflowRunner
     readonly #workflow: Workflow;
     readonly #checkpointStore?: IDocumentStore;
     readonly #collection: string;
+    readonly #context?: ExecutionContext;
+    readonly #tracker?: SpendTracker;
     readonly #events = new WorkflowEventEmitter();
 
     constructor( workflow: Workflow, options: WorkflowRunnerOptions = {} )
@@ -134,6 +146,8 @@ export class WorkflowRunner
         this.#workflow = workflow;
         this.#checkpointStore = options.checkpointStore;
         this.#collection = options.collection ?? 'workflow_checkpoints';
+        this.#context = options.context;
+        this.#tracker = options.tracker;
     }
 
     public on( eventType: Parameters<WorkflowEventEmitter['on']>[0], listener: WorkflowEventListener ): void
@@ -665,6 +679,19 @@ export class WorkflowRunner
                 return { kind : 'ok' };
             }
 
+            if( node.type === 'decision' )
+            {
+                return await this.#executeDecision( 
+                    node as DecisionNode, 
+                    context, 
+                    inputs, 
+                    stepOutputs, 
+                    completedSteps, 
+                    skippedSteps, 
+                    signal 
+                );
+            }
+
             if( node.type === 'step' )
             {
                 const stepNode = node as StepNode;
@@ -713,6 +740,142 @@ export class WorkflowRunner
         {
             return { kind : 'failed', error : err };
         }
+    }
+
+    /**
+     * Decision step (R16-R20): one call to the decision model, then the routing function picks
+     * a declared branch. A failed call follows the step retry policy and never tries another model.
+     */
+    async #executeDecision(
+        node: DecisionNode,
+        context: StepContext,
+        inputs: Record<string, unknown>,
+        stepOutputs: Record<string, unknown>,
+        completedSteps: Set<string>,
+        skippedSteps: Set<string>,
+        signal: AbortSignal
+    ): Promise<{ kind: 'ok' } | { kind: 'failed', error: unknown }>
+    {
+        const { runId, stepId } = context;
+
+        this.emit( 'step_start', runId, stepId );
+
+        const maxAttempts = node.retries + 1;
+        let response: DecisionResponse | undefined;
+        let lastError: unknown;
+
+        for( let attempt = 1; attempt <= maxAttempts && !response; attempt++ )
+        {
+            if( signal.aborted )
+            {
+                lastError = signal.reason ?? new AIError( 'Aborted', 'WORKFLOW_ABORTED' );
+                break;
+            }
+
+            try
+            {
+                const upstream = this.#resolveStepInput( node, inputs, stepOutputs, completedSteps );
+                const data = typeof node.input === 'function' ? await node.input( upstream, context ) : node.input;
+
+                response = await this.#callDecision( node, data, signal );
+            }
+            catch( err )
+            {
+                lastError = err;
+
+                if( attempt < maxAttempts )
+                {
+                    try
+                    {
+                        await sleep( Math.min( 0.5 * ( 2 ** ( attempt - 1 ) ), 8 ) * 1000, signal );
+                    }
+                    catch( abortError )
+                    {
+                        lastError = abortError;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if( !response )
+        {
+            this.emit( 'step_failed', runId, stepId, lastError );
+
+            return { kind : 'failed', error : lastError };
+        }
+
+        try
+        {
+            const branchName = await node.route( response.answers as never, context );
+
+            if( typeof branchName !== 'string' || !Object.prototype.hasOwnProperty.call( node.branches, branchName ) )
+            {
+                throw new AIError( 
+                    `Decision '${stepId}' routed to undeclared branch '${String( branchName )}'`, 
+                    'WORKFLOW_UNKNOWN_BRANCH',
+                    { declared : Object.keys( node.branches ) } 
+                );
+            }
+
+            const chosen = node.branches[ branchName ];
+
+            stepOutputs[ stepId ] = 
+                {
+                    answers    : response.answers,
+                    calibrated : response.calibrated,
+                    model      : response.model,
+                    branch     : branchName,
+                    nextStep   : chosen
+                };
+            completedSteps.add( stepId );
+
+            for( const target of Object.values( node.branches ) )
+            {
+                if( target !== chosen )
+                {
+                    skippedSteps.add( target );
+                }
+            }
+
+            this.emit( 'step_complete', runId, stepId, stepOutputs[ stepId ] );
+
+            return { kind : 'ok' };
+        }
+        catch( err )
+        {
+            this.emit( 'step_failed', runId, stepId, err );
+
+            return { kind : 'failed', error : err };
+        }
+    }
+
+    async #callDecision( node: DecisionNode, input: Parameters<DecisionNode['model']['decide']>[0]['input'], signal: AbortSignal ): Promise<DecisionResponse>
+    {
+        const request = 
+            {
+                input,
+                questions : node.questions,
+                signal,
+                // The workflow retry policy governs retries; stacking transport retries would multiply attempts.
+                retry     : false as const,
+                ...( node.timeoutMs !== undefined ? { timeoutMs : node.timeoutMs } : {} )
+            };
+
+        if( this.#context )
+        {
+            return decideWithContext( this.#context, node.model, request, { 
+                tracker    : this.#tracker, 
+                name       : `workflow:decision:${node.id}`,
+                attributes : { 'workflow.stepId' : node.id } 
+            } );
+        }
+
+        const model = this.#tracker 
+            ? createMeteredDecisionModel( node.model, { tracker : this.#tracker } ) 
+            : node.model;
+
+        return model.decide( request );
     }
 
     #resolveStepInput( 
