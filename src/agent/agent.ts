@@ -413,7 +413,8 @@ export class Agent
                                     messages.push( {
                                         role      : 'assistant',
                                         content   : response.content,
-                                        toolCalls : response.toolCalls
+                                        toolCalls : response.toolCalls,
+                                        ...( response.reasoningContent !== undefined ? { reasoningContent : response.reasoningContent } : {} )
                                     } );
 
                                     pendingToolCalls = response.toolCalls.map( ( tc ) => 

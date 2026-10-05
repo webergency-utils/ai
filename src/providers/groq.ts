@@ -23,7 +23,7 @@ export class GroqProviderAdapter extends OpenAIProviderAdapter
         return {
             structuredOutput   : true,
             embeddings         : false,
-            reasoningContent   : false,
+            reasoningContent   : true,
             promptCacheControl : false,
             multimodal         : { image : true, audio : false, video : false, document : false }
         };

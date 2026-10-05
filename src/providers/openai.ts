@@ -30,10 +30,14 @@ interface OpenAIChoice
 {
     message?: {
         content?: string | null
+        reasoning_content?: string | null
+        reasoning?: string | null
         tool_calls?: RawOpenAIToolCall[]
     }
     delta?: {
         content?: string
+        reasoning_content?: string | null
+        reasoning?: string | null
         tool_calls?: Array<{
             index?: number
             id?: string
@@ -126,13 +130,16 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
         const usage = this.parseUsage( data.usage );
         const finishReason = this.mapFinishReason( choice?.finish_reason );
 
+        const reasoning = message?.reasoning_content ?? message?.reasoning;
+
         return this.withStructured( request, {
-            content   : message?.content ?? '',
-            role      : 'assistant',
-            toolCalls : toolCalls.length > 0 ? toolCalls : undefined,
+            content          : message?.content ?? '',
+            role             : 'assistant',
+            toolCalls        : toolCalls.length > 0 ? toolCalls : undefined,
+            reasoningContent : reasoning ? reasoning : undefined,
             usage,
             finishReason,
-            raw       : data
+            raw              : data
         } );
     }
 
@@ -192,6 +199,7 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
             const choice = chunkData.choices?.[0];
             const delta = choice?.delta;
             const deltaContent = delta?.content ?? '';
+            const deltaReasoning = delta?.reasoning_content ?? delta?.reasoning ?? undefined;
             const finishReason = this.mapFinishReason( choice?.finish_reason );
             const usage = chunkData.usage ? this.parseUsage( chunkData.usage ) : undefined;
 
@@ -204,7 +212,8 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
 
                     yield createStreamChunk( i === 0 ? deltaContent : '', 
                         {
-                            deltaToolCall : {
+                            deltaReasoningContent : i === 0 && deltaReasoning ? deltaReasoning : undefined,
+                            deltaToolCall         : {
                                 index     : tc.index ?? 0,
                                 id        : tc.id,
                                 name      : tc.function?.name,
@@ -220,9 +229,10 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
             {
                 yield createStreamChunk( deltaContent, 
                     {
+                        deltaReasoningContent : deltaReasoning ? deltaReasoning : undefined,
                         finishReason,
                         usage,
-                        raw : chunkData
+                        raw                   : chunkData
                     } );
             }
         }
@@ -323,6 +333,12 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
         return payload;
     }
 
+    /** True when assistant `reasoningContent` must be re-sent as `reasoning_content` (e.g. DeepSeek). */
+    protected get echoesReasoningContent(): boolean
+    {
+        return false;
+    }
+
     /**
      * Wire format for `outputSchema`. OpenAI-compatible providers without `json_schema`
      * (e.g. DeepSeek) override this to 'json_object'.
@@ -411,6 +427,11 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
                     role    : 'assistant',
                     content : msg.content || null
                 };
+
+            if( this.echoesReasoningContent && msg.reasoningContent !== undefined )
+            {
+                res.reasoning_content = msg.reasoningContent;
+            }
 
             if( msg.toolCalls && msg.toolCalls.length > 0 )
             {
