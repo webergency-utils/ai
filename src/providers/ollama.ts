@@ -11,6 +11,7 @@ import type {
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
 import { ProviderError } from '../core/error.js';
+import { parseToolArguments } from '../core/tool-stream.js';
 import { createStreamChunk } from '../core/stream.js';
 import { createNDJSONDecoder } from '../core/ndjson.js';
 
@@ -18,7 +19,7 @@ interface RawOllamaToolCall
 {
     function?: {
         name?: string
-        arguments?: Record<string, unknown>
+        arguments?: Record<string, unknown> | string
     }
 }
 
@@ -91,7 +92,12 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
         };
     }
 
-    public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    public stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    {
+        return this.finalizeChunks( request, this.streamChunks( request ) );
+    }
+
+    protected async* streamChunks( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
     {
         this.assertRequestSupported( request );
 
@@ -370,7 +376,7 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
                     {
                         id        : `ollama_call_${index++}`,
                         name      : tc.function.name,
-                        arguments : tc.function.arguments ?? {}
+                        arguments : parseToolArguments( this.provider, tc.function.name, tc.function.arguments )
                     } );
             }
         }

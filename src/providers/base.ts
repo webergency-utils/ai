@@ -8,6 +8,7 @@ import type {
     ModelResponse, 
     ModelStreamChunk 
 } from '../core/types.js';
+import { finalizeStream } from '../core/tool-stream.js';
 import { WarningEmitter, type WarningEvent, type WarningListener } from '../core/warning.js';
 import { 
     CancelledError, 
@@ -268,6 +269,18 @@ export abstract class BaseProviderAdapter implements LanguageModel
                 `attachment type '${type}' is not supported by ${this.provider}` 
             );
         }
+    }
+
+    /**
+     * Wraps a raw chunk source: parses and validates streamed tool calls once the
+     * stream ends. Adapters call this from `stream()` around their wire parser.
+     */
+    protected finalizeChunks( 
+        request: ModelRequest, 
+        source: AsyncIterable<ModelStreamChunk> 
+    ): AsyncIterable<ModelStreamChunk>
+    {
+        return finalizeStream( source, { provider : this.provider, tools : request.tools } );
     }
 
     public abstract generate( request: ModelRequest ): Promise<ModelResponse>;

@@ -162,6 +162,8 @@ export type ModelStreamChunk =
             arguments? : string
         }
         toolCalls?    : ToolCall[]
+        /** Terminal chunk only: parsed and schema-validated output when `outputSchema` was requested. */
+        structured?   : unknown
         usage?        : UsageMetrics
         finishReason? : 'stop' | 'tool_calls' | 'length' | 'content_filter' | 'error' | 'other'
         raw?          : unknown

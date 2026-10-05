@@ -10,6 +10,7 @@ import type {
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
 import { ProviderError } from '../core/error.js';
+import { parseToolArguments } from '../core/tool-stream.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
 
 interface RawGeminiPart
@@ -119,7 +120,7 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
                     toolCalls.push( {
                         id        : `gemini_call_${Date.now()}_${callIndex++}`,
                         name      : part.functionCall.name,
-                        arguments : part.functionCall.args ?? {}
+                        arguments : parseToolArguments( this.provider, part.functionCall.name, part.functionCall.args )
                     } );
                 }
             }
@@ -144,7 +145,12 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
         };
     }
 
-    public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    public stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    {
+        return this.finalizeChunks( request, this.streamChunks( request ) );
+    }
+
+    protected async* streamChunks( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
     {
         this.assertRequestSupported( request );
 
@@ -235,7 +241,8 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
 
                     yield createStreamChunk( i === 0 ? deltaContent : '', {
                         deltaToolCall : {
-                            index     : toolCallIndex++,
+                            index     : toolCallIndex,
+                            id        : `gemini_call_${Date.now()}_${toolCallIndex++}`,
                             name      : fc.name,
                             arguments : JSON.stringify( fc.args )
                         },

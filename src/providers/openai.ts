@@ -11,6 +11,7 @@ import type {
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
 import { ProviderError } from '../core/error.js';
+import { parseToolArguments } from '../core/tool-stream.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
 
 interface RawOpenAIToolCall
@@ -133,7 +134,12 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
         };
     }
 
-    public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    public stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    {
+        return this.finalizeChunks( request, this.streamChunks( request ) );
+    }
+
+    protected async* streamChunks( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
     {
         this.assertRequestSupported( request );
 
@@ -433,24 +439,13 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
         {
             if( tc.type === 'function' && tc.function )
             {
-                let args: Record<string, unknown>;
-
-                try
-                {
-                    args = typeof tc.function.arguments === 'string' 
-                        ? JSON.parse( tc.function.arguments ) 
-                        : ( tc.function.arguments ?? {} );
-                }
-                catch
-                {
-                    args = {};
-                }
+                const name = tc.function.name ?? '';
 
                 parsed.push( 
                     {
                         id        : tc.id ?? '',
-                        name      : tc.function.name ?? '',
-                        arguments : args
+                        name,
+                        arguments : parseToolArguments( this.provider, name, tc.function.arguments )
                     } );
             }
         }

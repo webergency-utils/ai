@@ -10,6 +10,7 @@ import type {
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
 import { ProviderError } from '../core/error.js';
+import { parseToolArguments } from '../core/tool-stream.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
 
 interface RawAnthropicUsage
@@ -104,11 +105,13 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                 }
                 else if( block.type === 'tool_use' )
                 {
+                    const name = block.name ?? '';
+
                     toolCalls.push( 
                         {
                             id        : block.id ?? '',
-                            name      : block.name ?? '',
-                            arguments : block.input ?? {}
+                            name,
+                            arguments : parseToolArguments( this.provider, name, block.input )
                         } );
                 }
             }
@@ -127,7 +130,12 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
         };
     }
 
-    public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    public stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
+    {
+        return this.finalizeChunks( request, this.streamChunks( request ) );
+    }
+
+    protected async* streamChunks( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
     {
         this.assertRequestSupported( request );
 
