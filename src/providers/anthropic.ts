@@ -8,6 +8,7 @@ import type {
     UsageMetrics
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
+import { ProviderError } from '../core/error.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
 
 interface RawAnthropicUsage
@@ -134,14 +135,32 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
 
         if( !response.body )
         {
-            return;
+            throw new ProviderError( this.provider, 'Stream response had no body', response.status );
         }
 
         let accumulatedUsage: RawAnthropicUsage = {};
         const activeToolCalls = new Map<number, { id: string, name: string }>();
+        let sawMessageStop = false;
 
         for await ( const event of parseSSEStream( response.body ) )
         {
+            if( event.event === 'error' || ( event.data && event.data.includes( '"type":"error"' ) ) )
+            {
+                let errorMessage = 'Stream error from provider';
+
+                try
+                {
+                    const parsed = JSON.parse( event.data ) as { error?: { message?: string }, message?: string };
+                    errorMessage = parsed.error?.message ?? parsed.message ?? errorMessage;
+                }
+                catch
+                {
+                    // Keep default message.
+                }
+
+                throw new ProviderError( this.provider, errorMessage, 200, event.data );
+            }
+
             if( !event.data )
             {
                 continue;
@@ -159,6 +178,17 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
             }
 
             const eventType = ( eventData.type as string ) ?? event.event;
+
+            if( eventType === 'error' )
+            {
+                const errObj = eventData.error as { message?: string } | undefined;
+                throw new ProviderError( 
+                    this.provider, 
+                    errObj?.message ?? 'Stream error from provider', 
+                    200, 
+                    eventData 
+                );
+            }
 
             if( eventType === 'message_start' )
             {
@@ -243,8 +273,18 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
 
             if( eventType === 'message_stop' )
             {
+                sawMessageStop = true;
                 break;
             }
+        }
+
+        if( !sawMessageStop )
+        {
+            throw new ProviderError( 
+                this.provider, 
+                'Stream ended without message_stop terminator', 
+                response.status 
+            );
         }
     }
 

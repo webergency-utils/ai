@@ -9,6 +9,7 @@ import type {
     UsageMetrics
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
+import { ProviderError } from '../core/error.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
 
 interface RawOpenAIToolCall
@@ -138,13 +139,16 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
 
         if( !response.body )
         {
-            return;
+            throw new ProviderError( this.provider, 'Stream response had no body', response.status );
         }
+
+        let sawDone = false;
 
         for await ( const event of parseSSEStream( response.body ) )
         {
             if( event.data === '[DONE]' )
             {
+                sawDone = true;
                 break;
             }
 
@@ -186,6 +190,15 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
                     usage,
                     raw : chunkData
                 } );
+        }
+
+        if( !sawDone )
+        {
+            throw new ProviderError( 
+                this.provider, 
+                'Stream ended without [DONE] terminator', 
+                response.status 
+            );
         }
     }
 

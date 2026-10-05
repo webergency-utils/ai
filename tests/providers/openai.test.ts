@@ -232,4 +232,37 @@ describe( 'OpenAIProviderAdapter', () =>
         expect( chunks[2].finishReason ).toBe( 'stop' );
         expect( chunks[2].usage?.totalTokens ).toBe( 15 );
     } );
+
+    it( 'throws when the stream ends without [DONE] (AE14)', async () => 
+    {
+        const chunk1 = 'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}\n\n';
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>( {
+            start( controller )
+            {
+                controller.enqueue( encoder.encode( chunk1 ) );
+                controller.close();
+            }
+        } );
+
+        vi.mocked( fetch ).mockResolvedValue( {
+            ok     : true,
+            status : 200,
+            body   : stream
+        } );
+
+        const adapter = new OpenAIProviderAdapter( {
+            provider : 'openai',
+            model    : 'gpt-4o',
+            apiKey   : 'sk-mock-key'
+        } );
+
+        await expect( ( async () => 
+        {
+            for await ( const _chunk of adapter.stream( { messages : [ { role : 'user', content : 'Hi' } ] } ) )
+            {
+                // consume
+            }
+        } )() ).rejects.toThrow( /without \[DONE\]/ );
+    } );
 } );

@@ -30,5 +30,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Run fuzzer
-        run: npx jazzer fuzz_ai.cjs --sync -- -runs=10000 -max_total_time=300
+      - name: Fuzz stream parsers
+        run: node scripts/run-fuzz.mjs fuzz_stream.cjs -- -runs=10000 -max_total_time=300
+
+      - name: Fuzz schema / spend / vector
+        run: node scripts/run-fuzz.mjs fuzz_ai.cjs -- -runs=10000 -max_total_time=300

@@ -62,13 +62,16 @@
         "lint": "eslint \"src/**/*.ts\"",
         "lint:fix": "eslint \"src/**/*.ts\" --fix",
         "test": "vitest run",
-        "test:watch": "vitest"
+        "test:watch": "vitest",
+        "fuzz": "npm run build && node scripts/run-fuzz.mjs fuzz_stream.cjs -- -runs=1000 -max_total_time=60",
+        "fuzz:legacy": "npm run build && node scripts/run-fuzz.mjs fuzz_ai.cjs -- -runs=1000 -max_total_time=60"
     },
     "dependencies": {
         "@webergency-utils/typechecker": "^0.8.1"
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
+        "@jazzer.js/core": "^2.1.0",
         "@stylistic/eslint-plugin": "^5.10.0",
         "@types/node": "^24.0.10",
         "eslint": "^10.2.0",

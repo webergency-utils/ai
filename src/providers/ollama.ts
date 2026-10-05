@@ -10,6 +10,7 @@ import type {
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
 import { createStreamChunk } from '../core/stream.js';
+import { createNDJSONDecoder } from '../core/ndjson.js';
 
 interface RawOllamaToolCall
 {
@@ -96,8 +97,38 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
         }
 
         const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
+        const textDecoder = new TextDecoder();
+        const ndjson = createNDJSONDecoder();
+
+        const parseLine = ( trimmed: string ): ModelStreamChunk | undefined => 
+        {
+            let chunkData: RawOllamaResponse;
+
+            try
+            {
+                chunkData = JSON.parse( trimmed ) as RawOllamaResponse;
+            }
+            catch
+            {
+                return undefined;
+            }
+
+            const deltaContent = chunkData.message?.content ?? '';
+            const toolCalls = this.parseToolCalls( chunkData.message?.tool_calls );
+            const isDone = chunkData.done ?? false;
+            const finishReason = isDone 
+                ? this.mapFinishReason( chunkData.done_reason, toolCalls.length > 0 ) 
+                : undefined;
+            const usage = isDone ? this.parseUsage( chunkData ) : undefined;
+
+            return createStreamChunk( deltaContent, 
+                {
+                    toolCalls : toolCalls.length > 0 ? toolCalls : undefined,
+                    finishReason,
+                    usage,
+                    raw       : chunkData
+                } );
+        };
 
         try
         {
@@ -110,51 +141,61 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
                     break;
                 }
 
-                buffer += decoder.decode( value, { stream : true } );
-                const lines = buffer.split( '\n' );
-                buffer = lines.pop() ?? '';
-
-                for( const line of lines )
+                for( const line of ndjson.push( textDecoder.decode( value, { stream : true } ) ) )
                 {
-                    const trimmed = line.trim();
+                    const chunk = parseLine( line );
 
-                    if( !trimmed )
+                    if( chunk )
                     {
-                        continue;
+                        yield chunk;
                     }
+                }
+            }
 
-                    let chunkData: RawOllamaResponse;
+            const tail = textDecoder.decode();
 
-                    try
+            if( tail )
+            {
+                for( const line of ndjson.push( tail ) )
+                {
+                    const chunk = parseLine( line );
+
+                    if( chunk )
                     {
-                        chunkData = JSON.parse( trimmed ) as RawOllamaResponse;
+                        yield chunk;
                     }
-                    catch
-                    {
-                        continue;
-                    }
+                }
+            }
 
-                    const deltaContent = chunkData.message?.content ?? '';
-                    const toolCalls = this.parseToolCalls( chunkData.message?.tool_calls );
-                    const isDone = chunkData.done ?? false;
-                    const finishReason = isDone 
-                        ? this.mapFinishReason( chunkData.done_reason, toolCalls.length > 0 ) 
-                        : undefined;
-                    const usage = isDone ? this.parseUsage( chunkData ) : undefined;
+            for( const line of ndjson.flush() )
+            {
+                const chunk = parseLine( line );
 
-                    yield createStreamChunk( deltaContent, 
-                        {
-                            toolCalls : toolCalls.length > 0 ? toolCalls : undefined,
-                            finishReason,
-                            usage,
-                            raw       : chunkData
-                        } );
+                if( chunk )
+                {
+                    yield chunk;
                 }
             }
         }
         finally
         {
-            reader.releaseLock();
+            try
+            {
+                await reader.cancel();
+            }
+            catch
+            {
+                // Already closed.
+            }
+
+            try
+            {
+                reader.releaseLock();
+            }
+            catch
+            {
+                // Already released.
+            }
         }
     }
 

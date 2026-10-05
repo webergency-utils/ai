@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import type { ToolDefinition } from '../core/types.js';
 import { AIError } from '../core/error.js';
 import { parseSSEStream } from '../core/stream.js';
+import { createNDJSONDecoder } from '../core/ndjson.js';
 import type { 
     JSONRPCMessage, 
     JSONRPCRequest, 
@@ -101,13 +102,34 @@ export class StdioTransport implements MCPTransport
     readonly #env?: Record<string, string>;
     #process?: ChildProcess;
     #handler?: ( message: JSONRPCMessage ) => void;
-    #buffer = '';
+    readonly #textDecoder = new TextDecoder();
+    readonly #ndjson = createNDJSONDecoder();
 
     constructor( command: string, args: string[] = [], env?: Record<string, string> )
     {
         this.#command = command;
         this.#args = args;
         this.#env = env;
+    }
+
+    #dispatchLines( lines: string[] ): void
+    {
+        for( const trimmed of lines )
+        {
+            try
+            {
+                const parsed = JSON.parse( trimmed ) as JSONRPCMessage;
+
+                if( this.#handler )
+                {
+                    this.#handler( parsed );
+                }
+            }
+            catch
+            {
+                // Ignore non-JSON output
+            }
+        }
     }
 
     public async connect(): Promise<void>
@@ -120,33 +142,19 @@ export class StdioTransport implements MCPTransport
 
         this.#process.stdout?.on( 'data', ( chunk: Buffer ) => 
         {
-            this.#buffer += chunk.toString( 'utf8' );
-            const lines = this.#buffer.split( '\n' );
-            this.#buffer = lines.pop() ?? '';
+            this.#dispatchLines( this.#ndjson.push( this.#textDecoder.decode( chunk, { stream : true } ) ) );
+        } );
 
-            for( const line of lines )
+        this.#process.stdout?.on( 'end', () => 
+        {
+            const tail = this.#textDecoder.decode();
+
+            if( tail )
             {
-                const trimmed = line.trim();
-
-                if( !trimmed )
-                {
-                    continue;
-                }
-
-                try
-                {
-                    const parsed = JSON.parse( trimmed ) as JSONRPCMessage;
-
-                    if( this.#handler )
-                    {
-                        this.#handler( parsed );
-                    }
-                }
-                catch
-                {
-                    // Ignore non-JSON output
-                }
+                this.#dispatchLines( this.#ndjson.push( tail ) );
             }
+
+            this.#dispatchLines( this.#ndjson.flush() );
         } );
     }
 
