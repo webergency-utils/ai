@@ -1,15 +1,52 @@
 import type { ChatMessage } from '../core/types.js';
 import type { IDocumentStore } from '../storage/document.js';
 
-export interface ICheckpoint
+export type AgentRunStatus = 
+    | 'running' 
+    | 'completed' 
+    | 'interrupted' 
+    | 'abandoned'
+    | 'step_limit';
+
+export interface PendingToolCall
 {
     id        : string
-    threadId  : string
-    stepIndex : number
-    timestamp : number
-    messages  : ChatMessage[]
-    state     : Record<string, unknown>
-    spendUSD  : number
+    name      : string
+    arguments : Record<string, unknown>
+}
+
+export interface ICheckpoint
+{
+    id               : string
+    threadId         : string
+    runId            : string
+    sequence         : number
+    stepIndex        : number
+    runStepCount     : number
+    timestamp        : number
+    messages         : ChatMessage[]
+    state            : Record<string, unknown>
+    spendUSD         : number
+    status           : AgentRunStatus
+    originalInput?   : string | ChatMessage[]
+    pendingToolCalls?: PendingToolCall[]
+    completedToolIds?: string[]
+}
+
+export interface SaveCheckpointInput
+{
+    threadId          : string
+    runId             : string
+    sequence          : number
+    stepIndex         : number
+    runStepCount      : number
+    messages          : ChatMessage[]
+    state?            : Record<string, unknown>
+    spendUSD?         : number
+    status            : AgentRunStatus
+    originalInput?    : string | ChatMessage[]
+    pendingToolCalls? : PendingToolCall[]
+    completedToolIds? : string[]
 }
 
 export class CheckpointManager
@@ -23,35 +60,64 @@ export class CheckpointManager
         this.#collection = collection;
     }
 
+    public async saveCheckpoint( input: SaveCheckpointInput ): Promise<ICheckpoint>
     public async saveCheckpoint( 
         threadId: string, 
         stepIndex: number, 
         messages: ChatMessage[], 
+        state?: Record<string, unknown>, 
+        spendUSD?: number 
+    ): Promise<ICheckpoint>
+    public async saveCheckpoint( 
+        threadIdOrInput: string | SaveCheckpointInput, 
+        stepIndex?: number, 
+        messages?: ChatMessage[], 
         state: Record<string, unknown> = {}, 
         spendUSD: number = 0 
     ): Promise<ICheckpoint>
     {
+        const input: SaveCheckpointInput = typeof threadIdOrInput === 'string'
+            ? {
+                threadId     : threadIdOrInput,
+                runId        : `legacy_${threadIdOrInput}`,
+                sequence     : stepIndex ?? 0,
+                stepIndex    : stepIndex ?? 0,
+                runStepCount : stepIndex ?? 0,
+                messages     : messages ?? [],
+                state,
+                spendUSD,
+                status       : 'completed'
+            }
+            : threadIdOrInput;
+
         const timestamp = Date.now();
-        const id = `${threadId}_step_${stepIndex}_${timestamp}`;
+        const id = `${input.threadId}_${input.runId}_seq_${input.sequence}_${timestamp}`;
 
-        const checkpoint: ICheckpoint = 
-            {
-                id,
-                threadId,
-                stepIndex,
-                timestamp,
-                messages : structuredClone( messages ),
-                state    : structuredClone( state ),
-                spendUSD
-            };
+        const checkpoint: ICheckpoint = {
+            id,
+            threadId         : input.threadId,
+            runId            : input.runId,
+            sequence         : input.sequence,
+            stepIndex        : input.stepIndex,
+            runStepCount     : input.runStepCount,
+            timestamp,
+            messages         : structuredClone( input.messages ),
+            state            : structuredClone( input.state ?? {} ),
+            spendUSD         : input.spendUSD ?? 0,
+            status           : input.status,
+            originalInput    : input.originalInput,
+            pendingToolCalls : input.pendingToolCalls 
+                ? structuredClone( input.pendingToolCalls ) 
+                : undefined,
+            completedToolIds : input.completedToolIds 
+                ? [ ...input.completedToolIds ] 
+                : undefined
+        };
 
-        // Save historical step checkpoint
         await this.#store.set( this.#collection, id, checkpoint as unknown as Record<string, unknown> );
-
-        // Update thread pointer to latest in dedicated collection
         await this.#store.set( 
             `${this.#collection}_latest`, 
-            threadId, 
+            input.threadId, 
             checkpoint as unknown as Record<string, unknown> 
         );
 
@@ -72,7 +138,7 @@ export class CheckpointManager
     {
         const all = await this.#store.list<ICheckpoint>( this.#collection, { threadId } );
 
-        all.sort( ( a, b ) => {return a.stepIndex - b.stepIndex;} );
+        all.sort( ( a, b ) => {return a.sequence - b.sequence;} );
 
         return all;
     }

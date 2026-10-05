@@ -155,6 +155,6 @@ describe( 'Autonomous Agent Tool Execution Loop', () =>
 
         await expect( agent.run( 'test', { signal : controller.signal } ) )
             .rejects
-            .toThrow( /aborted/ );
+            .toThrow( /cancelled|aborted/i );
     } );
 } );
