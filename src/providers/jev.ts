@@ -95,7 +95,15 @@ export class JevDecisionAdapter extends BaseTransport implements DecisionModel
     constructor( config: JevDecisionConfig = {} )
     {
         super( { ...config, provider : JEV_PROVIDER, model : config.model || JEV_DEFAULT_MODEL } );
-        this.#baseUrl = ( config.baseUrl ?? JEV_DEFAULT_BASE_URL ).replace( /\/+$/, '' );
+        const rawBase = config.baseUrl ?? JEV_DEFAULT_BASE_URL;
+        let end = rawBase.length;
+
+        while( end > 0 && rawBase.charCodeAt( end - 1 ) === 47 /* '/' */ )
+        {
+            end -= 1;
+        }
+
+        this.#baseUrl = rawBase.slice( 0, end );
         this.#limits = config.inputLimits ?? { maxTokens : JEV_MAX_TOKENS, maxContextTokens : JEV_MAX_CONTEXT_TOKENS };
     }
 
