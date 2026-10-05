@@ -77,6 +77,7 @@ When using built-in native REST/SSE adapters without explicitly providing `apiKe
 | `ANTHROPIC_API_KEY` | `anthropic` | Anthropic Messages API key |
 | `GEMINI_API_KEY` | `gemini` | Google AI Gemini API key |
 | `GROQ_API_KEY` | `groq` | Groq Cloud fast inference key |
+| `TYPESAFE_API_KEY` | `typesafe` (`jev`) | TypeSafe Jev decision model key |
 
 ## Architecture & Internals
 
@@ -381,6 +382,51 @@ console.log( initialRun.status ); // 'suspended'
 const finalRun = await runner.resume( 'article-run-1', { approved : true } );
 console.log( finalRun.status ); // 'completed'
 ```
+
+### Decision Models (Jev) & Decision Steps
+
+A decision model takes input data plus named, typed questions and returns one typed answer per question, with probabilities. TypeSafe's Jev is the native implementation (native HTTP, no SDK needed); any `LanguageModel` with structured output can stand in.
+
+```typescript
+import { createDecisionModel, question } from '@webergency-utils/ai';
+
+const questions = {
+    team    : question.choice( { billing : 'Payments, invoices', technical : 'Bugs, outages', other : null } ),
+    urgency : question.score( [ 'can wait', 'today', 'right now' ] ),
+    refund  : question.yesNo( { instructions : 'Will the customer demand a refund?' } )
+};
+
+// Jev: reads TYPESAFE_API_KEY; pin a version or use the default 'jev-latest'
+const jev = createDecisionModel( { provider : 'typesafe', model : 'jev-latest' } );
+// Or any language model with structured output (answers are marked calibrated: false)
+const standIn = createDecisionModel( { provider : 'openai', model : 'gpt-4o' } );
+
+const { answers, calibrated } = await jev.decide( { input : { subject : 'Charged twice' }, questions } );
+
+answers.team.value;             // 'billing' | 'technical' | 'other' (a misspelled label fails to compile)
+answers.team.probabilities;     // { billing : 0.88, technical : 0.12, other : 0 }
+answers.urgency.value;          // probability-weighted level, e.g. 1.05
+answers.refund.probability;     // 0..1
+```
+
+Question types: `question.choice` (1–255 labels), `question.score` (2–10 levels), `question.yesNo`. Vendor wire names (Jev's `noul`) stay inside the adapter. Requests over the model's input limit fail with `InputLimitError`; input is never truncated. Cancellation, timeouts, and retries match language-model calls; wrap with `createMeteredDecisionModel` or use `decideWithContext` for spend and trace spans (Jev is priced on input tokens only).
+
+A workflow decision step asks its questions in one call and a typed routing function picks the single branch that runs:
+
+```typescript
+workflow
+    .decision( 'triage', {
+        model        : jev,
+        questions,
+        dependencies : [ 'intake' ],
+        input        : ( ticket ) => ticket,
+        branches     : { billing : 'billing_flow', technical : 'tech_flow' }, // branch name -> node id
+        route        : ( answers ) => answers.team.value === 'billing' ? 'billing' : 'technical',
+        retries      : 2 // a failed call follows the workflow retry policy; no other model is tried
+    } );
+```
+
+The answers are saved in the checkpoint as the step output, so a resumed run does not ask again.
 
 ## Troubleshooting
 
