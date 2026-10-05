@@ -10,6 +10,7 @@ import type {
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
 import { ProviderError } from '../core/error.js';
+import { toGeminiParts } from '../core/multimodal.js';
 import { parseToolArguments } from '../core/tool-stream.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
 
@@ -19,6 +20,10 @@ interface RawGeminiPart
     inlineData?: {
         mimeType: string
         data: string
+    }
+    fileData?: {
+        mimeType: string
+        fileUri: string
     }
     functionCall?: {
         name: string
@@ -428,22 +433,7 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
 
             if( msg.attachments && msg.attachments.length > 0 )
             {
-                for( const att of msg.attachments )
-                {
-                    const base64Data = att.data 
-                        ? ( typeof att.data === 'string' ? att.data : Buffer.from( att.data ).toString( 'base64' ) )
-                        : '';
-
-                    if( base64Data )
-                    {
-                        parts.push( {
-                            inlineData : {
-                                mimeType : att.mimeType,
-                                data     : base64Data
-                            }
-                        } );
-                    }
-                }
+                parts.push( ...toGeminiParts( this.provider, msg.attachments ) as RawGeminiPart[] );
             }
 
             if( msg.toolCalls && msg.toolCalls.length > 0 )

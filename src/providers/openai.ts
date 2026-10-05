@@ -11,6 +11,7 @@ import type {
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
 import { ProviderError } from '../core/error.js';
+import { assertAttachmentRole, toOpenAIParts } from '../core/multimodal.js';
 import { parseToolArguments } from '../core/tool-stream.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
 
@@ -335,6 +336,8 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
 
     protected formatSingleMessage( msg: ChatMessage ): Record<string, unknown>
     {
+        assertAttachmentRole( msg.role, msg.attachments );
+
         if( msg.role === 'tool' )
         {
             return {
@@ -373,50 +376,9 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
 
         if( msg.attachments && msg.attachments.length > 0 )
         {
-            const parts: Array<Record<string, unknown>> = [];
-
-            if( msg.content )
-            {
-                parts.push( { type : 'text', text : msg.content } );
-            }
-
-            for( const att of msg.attachments )
-            {
-                if( att.type === 'image' )
-                {
-                    let url = att.url;
-
-                    if( !url && att.data )
-                    {
-                        const base64Data = typeof att.data === 'string' 
-                            ? att.data 
-                            : Buffer.from( att.data ).toString( 'base64' );
-                        url = `data:${att.mimeType};base64,${base64Data}`;
-                    }
-
-                    if( url )
-                    {
-                        parts.push( { type : 'image_url', image_url : { url } } );
-                    }
-                }
-                else if( att.type === 'audio' && att.data )
-                {
-                    const base64Data = typeof att.data === 'string'
-                        ? att.data
-                        : Buffer.from( att.data ).toString( 'base64' );
-                    const format = att.mimeType.split( '/' )[1] ?? 'wav';
-
-                    parts.push( 
-                        {
-                            type        : 'input_audio',
-                            input_audio : { data : base64Data, format }
-                        } );
-                }
-            }
-
             return {
                 role    : msg.role,
-                content : parts
+                content : toOpenAIParts( this.provider, msg.content, msg.attachments )
             };
         }
 

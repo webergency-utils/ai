@@ -10,6 +10,7 @@ import type {
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
 import { ProviderError } from '../core/error.js';
+import { toAnthropicBlocks } from '../core/multimodal.js';
 import { parseToolArguments } from '../core/tool-stream.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
 
@@ -444,48 +445,10 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
 
             if( msg.attachments && msg.attachments.length > 0 )
             {
-                const blocks: Array<Record<string, unknown>> = [];
-
-                for( const att of msg.attachments )
-                {
-                    const base64Data = att.data 
-                        ? ( typeof att.data === 'string' ? att.data : Buffer.from( att.data ).toString( 'base64' ) )
-                        : '';
-
-                    if( att.type === 'image' && base64Data )
-                    {
-                        blocks.push( 
-                            {
-                                type : 'image',
-                                source : 
-                            {
-                                type       : 'base64',
-                                media_type : att.mimeType,
-                                data       : base64Data
-                            }
-                            } );
-                    }
-                    else if( att.type === 'document' && base64Data )
-                    {
-                        blocks.push( 
-                            {
-                                type : 'document',
-                                source : 
-                            {
-                                type       : 'base64',
-                                media_type : att.mimeType,
-                                data       : base64Data
-                            }
-                            } );
-                    }
-                }
-
-                if( msg.content )
-                {
-                    blocks.push( { type : 'text', text : msg.content } );
-                }
-
-                messages.push( { role : 'user', content : blocks } );
+                messages.push( { 
+                    role    : 'user', 
+                    content : toAnthropicBlocks( this.provider, msg.content, msg.attachments ) 
+                } );
                 continue;
             }
 

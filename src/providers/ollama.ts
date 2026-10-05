@@ -11,6 +11,7 @@ import type {
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
 import { ProviderError } from '../core/error.js';
+import { assertAttachmentRole, toOllamaImages } from '../core/multimodal.js';
 import { parseToolArguments } from '../core/tool-stream.js';
 import { createStreamChunk } from '../core/stream.js';
 import { createNDJSONDecoder } from '../core/ndjson.js';
@@ -325,6 +326,8 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
 
     protected formatSingleMessage( msg: ChatMessage ): Record<string, unknown>
     {
+        assertAttachmentRole( msg.role, msg.attachments );
+
         const out: Record<string, unknown> = 
             {
                 role    : msg.role,
@@ -333,26 +336,7 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
 
         if( msg.attachments && msg.attachments.length > 0 )
         {
-            const images: string[] = [];
-
-            for( const att of msg.attachments )
-            {
-                if( att.type === 'image' )
-                {
-                    if( att.data )
-                    {
-                        const b64 = typeof att.data === 'string' 
-                            ? att.data 
-                            : Buffer.from( att.data ).toString( 'base64' );
-                        images.push( b64 );
-                    }
-                }
-            }
-
-            if( images.length > 0 )
-            {
-                out.images = images;
-            }
+            out.images = toOllamaImages( this.provider, msg.attachments );
         }
 
         return out;

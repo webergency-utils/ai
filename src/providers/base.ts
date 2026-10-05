@@ -8,6 +8,7 @@ import type {
     ModelResponse, 
     ModelStreamChunk 
 } from '../core/types.js';
+import { assertAttachmentRole } from '../core/multimodal.js';
 import { finalizeStream } from '../core/tool-stream.js';
 import { WarningEmitter, type WarningEvent, type WarningListener } from '../core/warning.js';
 import { 
@@ -242,6 +243,8 @@ export abstract class BaseProviderAdapter implements LanguageModel
                     `reasoningContent is only valid on assistant messages (got '${msg.role}')` 
                 );
             }
+
+            assertAttachmentRole( msg.role, msg.attachments );
 
             for( const att of msg.attachments ?? [] )
             {
