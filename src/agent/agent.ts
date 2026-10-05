@@ -11,6 +11,7 @@ import { SimpleExecutionContext, type ExecutionContext } from './context.js';
 import type { Span } from '../trace/types.js';
 import type { TraceCollector } from '../trace/collector.js';
 import { createMeteredModel } from '../providers/metered.js';
+import { runOrdered } from './concurrency.js';
 import { EventChannel, type AgentEmit, type AgentEvent } from './events.js';
 
 export interface AgentConfig
@@ -19,6 +20,8 @@ export interface AgentConfig
     instructions?      : string
     tools?             : Tool[]
     maxIterations?     : number
+    /** Tool calls of one model turn that may run at once (default 1 = sequential). */
+    toolConcurrency?   : number
     checkpointManager? : CheckpointManager
     spendTracker?      : SpendTracker
     jitRetriever?      : JITToolRetriever
@@ -103,6 +106,7 @@ export class Agent
     readonly #instructions?     : string;
     readonly #tools             : Tool[];
     readonly #maxIterations     : number;
+    readonly #toolConcurrency   : number;
     readonly #checkpointManager?: CheckpointManager;
     readonly #spendTracker?     : SpendTracker;
     readonly #jitRetriever?     : JITToolRetriever;
@@ -114,6 +118,13 @@ export class Agent
         this.#instructions = config.instructions;
         this.#tools = config.tools ?? [];
         this.#maxIterations = config.maxIterations ?? 10;
+        this.#toolConcurrency = config.toolConcurrency ?? 1;
+
+        if( !Number.isInteger( this.#toolConcurrency ) || this.#toolConcurrency < 1 )
+        {
+            throw new AIError( `toolConcurrency must be an integer >= 1, got ${String( config.toolConcurrency )}`, 'AGENT_CONFIG', { toolConcurrency : config.toolConcurrency } );
+        }
+
         this.#checkpointManager = config.checkpointManager;
         this.#spendTracker = config.spendTracker;
         this.#jitRetriever = config.jitRetriever;
@@ -797,7 +808,10 @@ export class Agent
         }
     }
 
-    /** Runs tool calls one by one, committing each result before starting the next. */
+    /**
+     * Runs tool calls with at most `toolConcurrency` in flight. Results are committed in
+     * model-call order; the first `CancelledError` / `BudgetRefusedError` aborts siblings and is rethrown.
+     */
     async #executeTools( 
         calls: PendingToolCall[], 
         toolMap: Map<string, Tool>, 
@@ -806,12 +820,13 @@ export class Agent
         commit: ( tc: PendingToolCall, outcome: ToolOutcome ) => Promise<void>
     ): Promise<void>
     {
-        for( const tc of calls )
-        {
-            this.#assertNotAborted( signal );
-
-            await commit( tc, await this.#runOneTool( tc, toolMap, runCtx, signal ) );
-        }
+        await runOrdered( calls, {
+            limit   : this.#toolConcurrency,
+            signal,
+            barrier : ( tc ) => {return toolMap.get( tc.name )?.parallelSafe === false;},
+            run     : ( tc, _index, batchSignal ) => {return this.#runOneTool( tc, toolMap, runCtx, batchSignal );},
+            commit  : ( tc, outcome ) => {return commit( tc, outcome );}
+        } );
     }
 
     async #runOneTool( 
