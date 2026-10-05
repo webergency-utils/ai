@@ -83,26 +83,29 @@ export class MemoryCacheStore implements ICacheStore
         const ttl = ttlSeconds ?? this.#defaultTTLSeconds;
         const expiresAt = ttl !== undefined ? Date.now() + ttl * 1000 : undefined;
 
+        this.#evictExpired();
+
         if( this.#entries.has( key ) )
         {
             this.#entries.delete( key );
         }
-        else if( this.#entries.size >= this.#maxEntries )
+        else
         {
-            // Prune oldest LRU entry
-            const oldestKey = this.#entries.keys().next().value;
-
-            if( oldestKey !== undefined )
+            while( this.#liveSize() >= this.#maxEntries )
             {
-                this.#entries.delete( oldestKey );
+                const evicted = this.#evictOne();
+
+                if( !evicted )
+                {
+                    break;
+                }
             }
         }
 
-        this.#entries.set( key, 
-            {
-                value : structuredClone( value ),
-                expiresAt
-            } );
+        this.#entries.set( key, {
+            value : structuredClone( value ),
+            expiresAt
+        } );
 
         this.#reportSpend( {
             category    : 'storage',
@@ -155,7 +158,65 @@ export class MemoryCacheStore implements ICacheStore
 
     public async size(): Promise<number>
     {
-        return this.#entries.size;
+        this.#evictExpired();
+
+        return this.#liveSize();
+    }
+
+    #liveSize(): number
+    {
+        const now = Date.now();
+        let count = 0;
+
+        for( const entry of this.#entries.values() )
+        {
+            if( entry.expiresAt === undefined || entry.expiresAt >= now )
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    #evictExpired(): void
+    {
+        const now = Date.now();
+
+        for( const [ key, entry ] of this.#entries )
+        {
+            if( entry.expiresAt !== undefined && entry.expiresAt < now )
+            {
+                this.#entries.delete( key );
+            }
+        }
+    }
+
+    #evictOne(): boolean
+    {
+        const now = Date.now();
+
+        // Prefer expired entries first (R36).
+        for( const [ key, entry ] of this.#entries )
+        {
+            if( entry.expiresAt !== undefined && entry.expiresAt < now )
+            {
+                this.#entries.delete( key );
+
+                return true;
+            }
+        }
+
+        const oldestKey = this.#entries.keys().next().value;
+
+        if( oldestKey === undefined )
+        {
+            return false;
+        }
+
+        this.#entries.delete( oldestKey );
+
+        return true;
     }
 
     #reportSpend( entry: CategorySpendInput, context?: ExecutionContext ): void

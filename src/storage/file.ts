@@ -7,6 +7,7 @@ import type { ExecutionContext } from '../agent/context.js';
 import type { SpendTracker } from '../spend/tracker.js';
 import type { UnitCostRegistry } from '../spend/unit-registry.js';
 import type { CategorySpendInput } from '../spend/types.js';
+import { PathEscapeError } from '../core/error.js';
 
 export interface FileMetadata
 {
@@ -271,9 +272,27 @@ export class LocalDiskFileStore implements IFileStore
             const writeStream = fs.createWriteStream( fullPath );
             await new Promise<void>( ( resolve, reject ) => 
             {
+                let settled = false;
+                const fail = ( err: unknown ): void => 
+                {
+                    if( settled ){ return }
+
+                    settled = true;
+                    writeStream.destroy();
+                    reject( err );
+                };
+                const ok = (): void => 
+                {
+                    if( settled ){ return }
+
+                    settled = true;
+                    resolve();
+                };
+
+                nodeStream.on( 'error', fail );
+                writeStream.on( 'error', fail );
+                writeStream.on( 'finish', ok );
                 nodeStream.pipe( writeStream );
-                writeStream.on( 'finish', () => {resolve();} );
-                writeStream.on( 'error', ( err ) => {reject( err );} );
             } );
         }
 
@@ -449,9 +468,75 @@ export class LocalDiskFileStore implements IFileStore
         const fullPath = path.resolve( this.#baseDir, filePath );
         const rel = path.relative( this.#baseDir, fullPath );
 
-        if( rel.startsWith( '..' ) || path.isAbsolute( rel ) )
+        // Reject parent-directory traversal, but allow names that merely start with ".." (R34).
+        const segments = rel.split( path.sep );
+
+        if( 
+            path.isAbsolute( rel ) 
+            || segments.some( ( segment ) => {return segment === '..';} ) 
+        )
         {
-            throw new Error( `Access denied: path '${filePath}' traverses outside root directory` );
+            throw new PathEscapeError( 
+                filePath, 
+                `Access denied: path '${filePath}' traverses outside root directory` 
+            );
+        }
+
+        // Resolve symlinks when the path already exists so a link cannot escape the root.
+        try
+        {
+            const realBase = fs.realpathSync.native( this.#baseDir );
+            const parentDir = path.dirname( fullPath );
+
+            if( fs.existsSync( parentDir ) )
+            {
+                const realParent = fs.realpathSync.native( parentDir );
+                const candidate = path.join( realParent, path.basename( fullPath ) );
+                const realRel = path.relative( realBase, candidate );
+                const realSegments = realRel.split( path.sep );
+
+                if( 
+                    path.isAbsolute( realRel ) 
+                    || realSegments.some( ( segment ) => {return segment === '..';} ) 
+                )
+                {
+                    throw new PathEscapeError( 
+                        filePath, 
+                        `Access denied: path '${filePath}' escapes store root via symlink` 
+                    );
+                }
+
+                if( fs.existsSync( fullPath ) )
+                {
+                    const realFile = fs.realpathSync.native( fullPath );
+                    const fileRel = path.relative( realBase, realFile );
+                    const fileSegments = fileRel.split( path.sep );
+
+                    if( 
+                        path.isAbsolute( fileRel ) 
+                        || fileSegments.some( ( segment ) => {return segment === '..';} ) 
+                    )
+                    {
+                        throw new PathEscapeError( 
+                            filePath, 
+                            `Access denied: path '${filePath}' escapes store root via symlink` 
+                        );
+                    }
+
+                    return realFile;
+                }
+
+                return candidate;
+            }
+        }
+        catch( err )
+        {
+            if( err instanceof PathEscapeError )
+            {
+                throw err;
+            }
+
+            // Fall through to the resolved path when realpath is unavailable.
         }
 
         return fullPath;

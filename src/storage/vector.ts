@@ -2,6 +2,7 @@ import type { ExecutionContext } from '../agent/context.js';
 import type { SpendTracker } from '../spend/tracker.js';
 import type { UnitCostRegistry } from '../spend/unit-registry.js';
 import type { CategorySpendInput } from '../spend/types.js';
+import { DimensionMismatchError } from '../core/error.js';
 
 export interface VectorRecord
 {
@@ -35,6 +36,8 @@ export interface MemoryVectorStoreOptions
 {
     tracker?        : SpendTracker
     storagePricing? : UnitCostRegistry
+    /** When set, all vectors must match this dimension. Otherwise locked on first write. */
+    dimensions?     : number
 }
 
 export interface IVectorStore
@@ -56,17 +59,25 @@ export class MemoryVectorStore implements IVectorStore
     readonly #records         = new Map<string, VectorRecord>();
     readonly #tracker?        : SpendTracker;
     readonly #storagePricing? : UnitCostRegistry;
+    #dimensions?              : number;
 
     constructor( options: MemoryVectorStoreOptions = {} )
     {
         this.#tracker = options.tracker;
         this.#storagePricing = options.storagePricing;
+        this.#dimensions = options.dimensions;
+    }
+
+    public get dimensions(): number | undefined
+    {
+        return this.#dimensions;
     }
 
     public async upsert( records: VectorRecord[], options?: VectorStoreOperationOptions ): Promise<void>
     {
         for( const rec of records )
         {
+            this.#assertDimensions( rec.values.length );
             this.#records.set( rec.id, structuredClone( rec ) );
         }
 
@@ -85,6 +96,8 @@ export class MemoryVectorStore implements IVectorStore
         options?: VectorStoreOperationOptions 
     ): Promise<VectorQueryResult[]>
     {
+        this.#assertDimensions( vector.length );
+
         let topK = 5;
         let filt = filter;
         let context = options?.context;
@@ -111,13 +124,12 @@ export class MemoryVectorStore implements IVectorStore
 
             const score = this.cosineSimilarity( vector, rec.values );
 
-            scored.push( 
-                {
-                    id       : rec.id,
-                    score,
-                    metadata : rec.metadata ? structuredClone( rec.metadata ) : undefined,
-                    content  : rec.content
-                } );
+            scored.push( {
+                id       : rec.id,
+                score,
+                metadata : rec.metadata ? structuredClone( rec.metadata ) : undefined,
+                content  : rec.content
+            } );
         }
 
         scored.sort( ( a, b ) => {return b.score - a.score;} );
@@ -155,6 +167,22 @@ export class MemoryVectorStore implements IVectorStore
     public async clear(): Promise<void>
     {
         this.#records.clear();
+        this.#dimensions = undefined;
+    }
+
+    #assertDimensions( length: number ): void
+    {
+        if( this.#dimensions === undefined )
+        {
+            this.#dimensions = length;
+
+            return;
+        }
+
+        if( length !== this.#dimensions )
+        {
+            throw new DimensionMismatchError( this.#dimensions, length );
+        }
     }
 
     #reportSpend( entry: CategorySpendInput, context?: ExecutionContext ): void
