@@ -349,8 +349,73 @@ const client = new MCPClient( transport );
 await client.connect();
 
 const tools = await client.listTools();
-const toolDefs = await client.toToolDefinitions(); // Bindable directly to Agent
+const toolDefs = await client.toToolDefinitions(); // Definitions only (no `execute`)
 ```
+
+#### Using MCP tools in an Agent
+
+`createMCPTools( client, options? )` turns every tool of a connected `MCPClient` into an executable agent `Tool`. Calls forward the agent's `ExecutionContext` and abort signal, so MCP spans and spend nest under `tool:run:*`.
+
+```typescript
+import { Agent, MCPClient, createMCPTools } from '@webergency-utils/ai';
+
+const mcpTools = await createMCPTools( client, {
+    prefix  : 'mem_',                       // optional: prepended to bound names
+    include : /^(read|search)_/,            // optional: string[] | RegExp on server-side names
+    exclude : [ 'delete_all' ]              // optional: applied after `include`
+} );
+
+const agent = new Agent( { model, tools : mcpTools } );
+```
+
+Failures are loud: `isError` results throw `MCP_TOOL_ERROR` (the agent shows the model `Error: ...`), non-text content throws `MCP_UNSUPPORTED_CONTENT` instead of being dropped, duplicate names throw `MCP_DUPLICATE_TOOL`, and input schemas the validator cannot compile throw `MCP_UNSUPPORTED_SCHEMA` at bind time.
+
+### Agent: Streaming, Parallel Tools, Guardrails & Structured Output
+
+`Agent.run()` and `Agent.runStream()` share one step engine (checkpoints, spans, spend). `runStream()` yields typed `AgentEvent`s as the model streams; the last event is `finish` with the `AgentResult`.
+
+```typescript
+for await ( const event of agent.runStream( 'Weather in Prague and Berlin?' ) )
+{
+    switch( event.type )
+    {
+        case 'text:delta'  : process.stdout.write( event.delta ); break;
+        case 'tool:call'   : console.log( 'calling', event.toolCall.name ); break;
+        case 'tool:result' : console.log( event.name, event.isError ? 'failed' : 'ok' ); break;
+        case 'finish'      : console.log( event.result.spendUSD ); break;
+    }
+}
+```
+
+Event order per step: `step:start`, `text:delta` / `reasoning:delta`, `tool:call` (only after the call JSON is assembled and schema-validated), `tool:result` (always in model-call order), `step:finish`. Malformed tool JSON throws out of the iterator. Leaving the loop early, or aborting `options.signal`, cancels the request and saves an `interrupted` checkpoint.
+
+**Parallel tools.** `toolConcurrency: 4` runs the tool calls of one model turn with at most four in flight (default `1`). Results are appended and checkpointed in call order, so `resume()` re-runs only uncommitted calls. A `CancelledError` / `BudgetRefusedError` aborts sibling tools and is rethrown; mark shared-state tools with `parallelSafe: false` to run them alone.
+
+**Guardrails.** Plain functions returning `{ allow : true }` or `{ allow : false, reason, tripwire? }`:
+
+```typescript
+const agent = new Agent( {
+    model,
+    tools,
+    guardrails : {
+        input      : [ ( { messages } ) => { return looksLikeInjection( messages ) ? { allow : false, reason : 'injection' } : { allow : true }; } ],
+        toolCall   : [ ( call ) => { return call.name.startsWith( 'delete_' ) ? { allow : false, reason : 'destructive' } : { allow : true }; } ],
+        toolResult : [ ( { result } ) => { return result.includes( 'SECRET' ) ? { allow : false, reason : 'leak', tripwire : true } : { allow : true }; } ],
+        output     : [ async ( { text } ) => { return await moderate( text ) ? { allow : true } : { allow : false, reason : 'moderation' }; } ]
+    }
+} );
+```
+
+A tool-level deny is shown to the model as `Error: blocked by guardrail: <reason>` and the tool is not executed. An `input` / `output` deny, a `tripwire` deny, or a guardrail that throws (fail closed) raises `GuardrailTripwireError` (`stage`, `reason`) and saves the thread as `blocked`; history is rolled back to the last safe point. `input` guardrails do not run again on `resume()`.
+
+**Structured output.** `outputSchema` makes the result carry a validated `output`:
+
+```typescript
+const agent = new Agent( { model, tools, outputSchema : schema.object( { city : schema.string(), tempC : schema.number() } ) } );
+const { output } = await agent.run( 'Weather in Prague?' ); // { city, tempC }
+```
+
+The model must report `capabilities.structuredOutput` (construction throws a `CapabilityError` otherwise). The default `outputStrategy: 'finalize'` runs the tool loop normally and then makes one extra tool-less call with the schema; `'inline'` sends the schema on every step and needs a provider that supports schema together with tools. On `step_limit` no `output` is produced.
 
 ### Step-Based Workflow Engine (DAG & HITL)
 
