@@ -6,7 +6,8 @@ export type AgentRunStatus =
     | 'completed' 
     | 'interrupted' 
     | 'abandoned'
-    | 'step_limit';
+    | 'step_limit'
+    | 'blocked';
 
 export interface PendingToolCall
 {

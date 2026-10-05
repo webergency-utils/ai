@@ -41,7 +41,7 @@ export interface MCPTool
 
 export interface MCPContentItem
 {
-    type      : 'text' | 'image' | 'resource'
+    type      : 'text' | 'image' | 'audio' | 'resource' | 'resource_link'
     text?     : string
     data?     : string
     mimeType? : string

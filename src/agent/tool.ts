@@ -4,8 +4,14 @@ import type { ToolDefinition } from '../core/types.js';
 import { InvalidInputError } from '../core/error.js';
 import type { ExecutionContext } from './context.js';
 
+export interface ToolRunOptions
+{
+    /** Cancellation signal of the surrounding agent run (derived when sibling tools run in parallel). */
+    signal? : AbortSignal
+}
+
 export type ToolExecutor<TArgs = Record<string, unknown>, TResult = unknown> = 
-    ( args: TArgs, context?: ExecutionContext ) => Promise<TResult>;
+    ( args: TArgs, context?: ExecutionContext, options?: ToolRunOptions ) => Promise<TResult>;
 
 export interface ToolConfig<TArgs = Record<string, unknown>, TResult = unknown>
 {
@@ -13,6 +19,11 @@ export interface ToolConfig<TArgs = Record<string, unknown>, TResult = unknown>
     description : string
     parameters  : JsonSchema | Record<string, unknown>
     execute     : ToolExecutor<TArgs, TResult>
+    /**
+     * Set to `false` for tools that must not overlap with any other tool call
+     * when the agent runs with `toolConcurrency` greater than 1. Defaults to `true`.
+     */
+    parallelSafe? : boolean
 }
 
 export class Tool<TArgs = Record<string, unknown>, TResult = unknown>
@@ -20,6 +31,7 @@ export class Tool<TArgs = Record<string, unknown>, TResult = unknown>
     public readonly name        : string;
     public readonly description : string;
     public readonly parameters  : JsonSchema | Record<string, unknown>;
+    public readonly parallelSafe : boolean;
     readonly #executor          : ToolExecutor<TArgs, TResult>;
 
     constructor( config: ToolConfig<TArgs, TResult> )
@@ -27,10 +39,11 @@ export class Tool<TArgs = Record<string, unknown>, TResult = unknown>
         this.name = config.name;
         this.description = config.description;
         this.parameters = config.parameters;
+        this.parallelSafe = config.parallelSafe ?? true;
         this.#executor = config.execute;
     }
 
-    public async run( rawArgs: unknown, context?: ExecutionContext ): Promise<TResult>
+    public async run( rawArgs: unknown, context?: ExecutionContext, options?: ToolRunOptions ): Promise<TResult>
     {
         let validArgs: TArgs;
 
@@ -57,7 +70,7 @@ export class Tool<TArgs = Record<string, unknown>, TResult = unknown>
             validArgs = ( rawArgs ?? {} ) as TArgs;
         }
 
-        return this.#executor( validArgs, context );
+        return this.#executor( validArgs, context, options );
     }
 
     public toDefinition(): ToolDefinition
