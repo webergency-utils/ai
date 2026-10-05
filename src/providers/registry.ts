@@ -1,5 +1,6 @@
 import type { LanguageModel } from '../core/protocol.js';
 import type { EmbeddingProtocol } from '../core/embeddings.js';
+import type { DecisionModel } from '../core/decision.js';
 import type { ModelConfig } from '../core/types.js';
 import { CapabilityError, ProviderError } from '../core/error.js';
 import { OpenAIProviderAdapter } from './openai.js';
@@ -12,6 +13,8 @@ import { MistralProviderAdapter } from './mistral.js';
 import { OpenAIEmbeddingAdapter } from './openai-embeddings.js';
 import { GeminiEmbeddingAdapter } from './gemini-embeddings.js';
 import { OllamaEmbeddingAdapter } from './ollama-embeddings.js';
+import { JevDecisionAdapter } from './jev.js';
+import { LanguageModelDecisionAdapter, type LanguageModelDecisionOptions } from './language-model-decision.js';
 
 export type ProviderFactory = ( config: ModelConfig ) => LanguageModel;
 
@@ -202,4 +205,86 @@ export const defaultEmbeddingRegistry = new EmbeddingRegistry();
 export function createEmbeddingModel( config: ModelConfig ): EmbeddingProtocol
 {
     return defaultEmbeddingRegistry.create( config );
+}
+
+export type DecisionProviderFactory = ( config: ModelConfig ) => DecisionModel;
+
+export type DecisionModelConfig = ModelConfig & { decision? : LanguageModelDecisionOptions };
+
+/**
+ * Registry for decision models. `typesafe` (alias `jev`) is the native Jev adapter.
+ * Any provider registered in {@link ModelRegistry} is wrapped as a language-model decision model,
+ * so swapping Jev for a language model is a configuration change only.
+ */
+export class DecisionRegistry
+{
+    readonly #factories = new Map<string, DecisionProviderFactory>();
+    readonly #cache     = new Map<string, DecisionModel>();
+
+    constructor()
+    {
+        this.register( 'typesafe', ( config ) => {return new JevDecisionAdapter( config );} );
+        this.register( 'jev', ( config ) => {return new JevDecisionAdapter( config );} );
+    }
+
+    public register( providerId: string, factory: DecisionProviderFactory ): void
+    {
+        this.#factories.set( providerId.toLowerCase(), factory );
+    }
+
+    public has( providerId: string ): boolean
+    {
+        const id = providerId.toLowerCase();
+
+        return this.#factories.has( id ) || defaultRegistry.has( id );
+    }
+
+    public create( config: DecisionModelConfig ): DecisionModel
+    {
+        const providerId = config.provider.toLowerCase();
+        const cacheKey = configCacheKey( config );
+        const cached = this.#cache.get( cacheKey );
+
+        if( cached )
+        {
+            return cached;
+        }
+
+        const factory = this.#factories.get( providerId );
+        let adapter: DecisionModel;
+
+        if( factory )
+        {
+            adapter = factory( config );
+        }
+        else if( defaultRegistry.has( providerId ) )
+        {
+            const { decision, ...modelConfig } = config;
+
+            adapter = new LanguageModelDecisionAdapter( defaultRegistry.create( modelConfig ), decision );
+        }
+        else
+        {
+            throw new ProviderError( 
+                config.provider, 
+                `Provider '${config.provider}' is not registered in DecisionRegistry or ModelRegistry` 
+            );
+        }
+
+        this.#cache.set( cacheKey, adapter );
+
+        return adapter;
+    }
+
+    public clearCache(): void
+    {
+        this.#cache.clear();
+    }
+}
+
+export const defaultDecisionRegistry = new DecisionRegistry();
+
+export function createDecisionModel( config: DecisionModelConfig ): DecisionModel
+{
+    return defaultDecisionRegistry.create( config );
 }

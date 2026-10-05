@@ -1,5 +1,6 @@
 import { getCapabilities, type LanguageModel } from '../core/protocol.js';
 import type { ModelCapabilities, ModelRequest, ModelResponse, ModelStreamChunk } from '../core/types.js';
+import type { DecisionModel, DecisionQuestions, DecisionRequest, DecisionResponse } from '../core/decision.js';
 import type { EmbeddingOptions, EmbeddingProtocol, EmbeddingResponse } from '../core/embeddings.js';
 import type { SpendTracker } from '../spend/tracker.js';
 import type { Span } from '../trace/types.js';
@@ -312,4 +313,117 @@ export function createMeteredEmbeddingModel(
 ): MeteredEmbeddingModel
 {
     return new MeteredEmbeddingModel( inner, options );
+}
+
+/**
+ * Metering wrapper for decision models. Same preflight, retry-gap, and usage recording as
+ * {@link MeteredModel}; missing usage becomes a spend gap, never zero cost.
+ * Jev's output tokens are free, so its price table charges input tokens only.
+ * Wrap either the language model or the decision adapter built on it, not both.
+ */
+export class MeteredDecisionModel implements DecisionModel
+{
+    readonly #inner   : DecisionModel;
+    readonly #tracker : SpendTracker;
+    readonly #baseUrl?: string;
+    readonly #getSpan?: () => Span | undefined;
+    readonly #threadId?: string;
+    readonly #agentId?: string;
+
+    constructor( inner: DecisionModel, options: MeteredModelOptions )
+    {
+        this.#inner = inner;
+        this.#tracker = options.tracker;
+        this.#baseUrl = options.baseUrl;
+        this.#getSpan = options.getSpan;
+        this.#threadId = options.threadId;
+        this.#agentId = options.agentId;
+    }
+
+    public get provider(): string
+    {
+        return this.#inner.provider;
+    }
+
+    public get model(): string
+    {
+        return this.#inner.model;
+    }
+
+    public get inner(): DecisionModel
+    {
+        return this.#inner;
+    }
+
+    public async decide<Q extends DecisionQuestions>( request: DecisionRequest<Q> ): Promise<DecisionResponse<Q>>
+    {
+        this.#tracker.assertModelCallAllowed( {
+            provider : this.provider,
+            model    : this.model,
+            baseUrl  : this.#baseUrl
+        } );
+
+        const prior = request.onAttempt;
+        const response = await this.#inner.decide( {
+            ...request,
+            onAttempt : ( info ) => 
+            {
+                if( info.attempt > 1 )
+                {
+                    this.#tracker.recordSpendGap( 
+                        `Retry attempt ${info.attempt}/${info.maxAttempts} for ${this.provider}:${this.model} decision`, 
+                        {
+                            provider    : this.provider,
+                            model       : this.model,
+                            attempt     : info.attempt,
+                            maxAttempts : info.maxAttempts,
+                            delayMs     : info.delayMs,
+                            error       : info.error
+                        }, 
+                        { threadId : this.#threadId, agentId : this.#agentId } 
+                    );
+                }
+
+                prior?.( info );
+            }
+        } );
+
+        if( !response.usage )
+        {
+            this.#tracker.recordSpendGap( 
+                `Decision response missing usage for ${this.provider}:${this.model}`, 
+                { provider : this.provider, model : this.model, usageMissing : true }, 
+                { threadId : this.#threadId, agentId : this.#agentId } 
+            );
+
+            return response;
+        }
+
+        const details = this.#tracker.record( this.model, response.usage, {
+            provider : this.provider,
+            baseUrl  : this.#baseUrl
+        } );
+        const span = this.#getSpan?.();
+
+        if( span )
+        {
+            span.recordSpend( {
+                category    : 'model',
+                subcategory : this.model,
+                costUSD     : details.totalCost,
+                units       : response.usage.totalTokens,
+                unitType    : 'tokens'
+            } );
+        }
+
+        return response;
+    }
+}
+
+export function createMeteredDecisionModel( 
+    inner: DecisionModel, 
+    options: MeteredModelOptions 
+): MeteredDecisionModel
+{
+    return new MeteredDecisionModel( inner, options );
 }
