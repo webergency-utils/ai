@@ -24,6 +24,12 @@ export interface ConditionOptions
     dependencies? : string[]
 }
 
+export interface RouteOptions
+{
+    branches      : Record<string, string>
+    dependencies? : string[]
+}
+
 export class Workflow
 {
     public readonly name: string;
@@ -45,14 +51,13 @@ export class Workflow
             throw new AIError( `Node '${id}' is already defined in workflow '${this.name}'`, 'WORKFLOW_DUPLICATE_NODE' );
         }
 
-        this.#nodes.set( id, 
-            {
-                id,
-                type         : 'step',
-                handler      : handler as StepHandler<unknown, unknown>,
-                retries      : options.retries ?? 0,
-                dependencies : options.dependencies ?? []
-            } );
+        this.#nodes.set( id, {
+            id,
+            type         : 'step',
+            handler      : handler as StepHandler<unknown, unknown>,
+            retries      : options.retries ?? 0,
+            dependencies : options.dependencies ?? []
+        } );
 
         return this;
     }
@@ -64,13 +69,12 @@ export class Workflow
             throw new AIError( `Node '${id}' is already defined in workflow '${this.name}'`, 'WORKFLOW_DUPLICATE_NODE' );
         }
 
-        this.#nodes.set( id, 
-            {
-                id,
-                type         : 'wait',
-                prompt       : options.prompt ?? '',
-                dependencies : options.dependencies ?? []
-            } );
+        this.#nodes.set( id, {
+            id,
+            type         : 'wait',
+            prompt       : options.prompt ?? '',
+            dependencies : options.dependencies ?? []
+        } );
 
         return this;
     }
@@ -86,17 +90,56 @@ export class Workflow
             throw new AIError( `Node '${id}' is already defined in workflow '${this.name}'`, 'WORKFLOW_DUPLICATE_NODE' );
         }
 
-        this.#nodes.set( id, 
-            {
-                id,
-                type         : 'condition',
-                predicate,
-                ifTrue       : options.ifTrue,
-                ifFalse      : options.ifFalse,
-                dependencies : options.dependencies ?? []
-            } );
+        // Sugar over named-branch routing (KTD6).
+        this.#nodes.set( id, {
+            id,
+            type         : 'condition',
+            predicate,
+            ifTrue       : options.ifTrue,
+            ifFalse      : options.ifFalse,
+            dependencies : options.dependencies ?? [],
+            branchTargets : [ options.ifTrue, options.ifFalse ]
+        } );
 
         return this;
+    }
+
+    public route( 
+        id: string, 
+        choose: ( context: StepContext ) => string | Promise<string>, 
+        options: RouteOptions 
+    ): this
+    {
+        if( this.#nodes.has( id ) )
+        {
+            throw new AIError( `Node '${id}' is already defined in workflow '${this.name}'`, 'WORKFLOW_DUPLICATE_NODE' );
+        }
+
+        const targets = Object.values( options.branches );
+
+        this.#nodes.set( id, {
+            id,
+            type          : 'route',
+            choose,
+            branches      : { ...options.branches },
+            dependencies  : options.dependencies ?? [],
+            branchTargets : targets
+        } );
+
+        return this;
+    }
+
+    public hasWaitNodes(): boolean
+    {
+        for( const node of this.#nodes.values() )
+        {
+            if( node.type === 'wait' )
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public getNode( id: string ): WorkflowNode | undefined
@@ -120,20 +163,48 @@ export class Workflow
             adj.set( id, [] );
         }
 
+        const addEdge = ( from: string, to: string ): void => 
+        {
+            if( !this.#nodes.has( from ) )
+            {
+                throw new AIError( 
+                    `Node '${to}' depends on undefined node '${from}'`, 
+                    'WORKFLOW_INVALID_DEPENDENCY' 
+                );
+            }
+
+            adj.get( from )!.push( to );
+            inDegree.set( to, ( inDegree.get( to ) ?? 0 ) + 1 );
+        };
+
         for( const node of this.#nodes.values() )
         {
             for( const dep of node.dependencies )
             {
-                if( !this.#nodes.has( dep ) )
-                {
-                    throw new AIError( 
-                        `Node '${node.id}' depends on undefined node '${dep}'`, 
-                        'WORKFLOW_INVALID_DEPENDENCY' 
-                    );
-                }
+                addEdge( dep, node.id );
+            }
 
-                adj.get( dep )!.push( node.id );
-                inDegree.set( node.id, ( inDegree.get( node.id ) ?? 0 ) + 1 );
+            // Implicit ordering edges from routers to branch targets (R20).
+            if( node.branchTargets )
+            {
+                for( const target of node.branchTargets )
+                {
+                    if( !this.#nodes.has( target ) )
+                    {
+                        throw new AIError( 
+                            `Node '${node.id}' routes to undefined node '${target}'`, 
+                            'WORKFLOW_INVALID_DEPENDENCY' 
+                        );
+                    }
+
+                    const targetNode = this.#nodes.get( target )!;
+
+                    // Avoid double-counting when the branch target already lists the router as a dep.
+                    if( !targetNode.dependencies.includes( node.id ) )
+                    {
+                        addEdge( node.id, target );
+                    }
+                }
             }
         }
 

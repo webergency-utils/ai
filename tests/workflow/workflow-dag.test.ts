@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Workflow, WorkflowRunner } from '../../src/workflow/index.js';
 import { MemoryDocStore } from '../../src/storage/index.js';
 import { AIError } from '../../src/core/error.js';
@@ -86,19 +86,19 @@ describe( 'Typed Step Workflow Engine & DAG Runner', () =>
         const runner = new WorkflowRunner( workflow, { checkpointStore } );
         const runId = 'approval-run-123';
 
-        // 1. Initial execution suspends at WaitNode
         const initialResult = await runner.execute( {}, runId );
 
         expect( initialResult.status ).toBe( 'suspended' );
         expect( initialResult.suspendedAtStepId ).toBe( 'approval_wait' );
         expect( log ).toEqual( [ 'drafted' ] );
 
-        // Verify checkpoint exists in document store
         const checkpoint = await checkpointStore.get( 'workflow_checkpoints', runId );
         expect( checkpoint ).toBeDefined();
 
-        // 2. Resume execution with human approval signal
-        const resumedResult = await runner.resume( runId, { approved : true, reviewer : 'editor1' } );
+        const resumedResult = await runner.resume( runId, {
+            waitId : 'approval_wait',
+            data   : { approved : true, reviewer : 'editor1' }
+        } );
 
         expect( resumedResult.status ).toBe( 'completed' );
         expect( log ).toEqual( [ 'drafted', 'published' ] );
@@ -111,6 +111,7 @@ describe( 'Typed Step Workflow Engine & DAG Runner', () =>
 
     it( 'should retry failing steps according to retries option', async () => 
     {
+        vi.useFakeTimers();
         const workflow = new Workflow( 'retry-test' );
         let attempts = 0;
 
@@ -127,10 +128,191 @@ describe( 'Typed Step Workflow Engine & DAG Runner', () =>
         }, { retries : 2 } );
 
         const runner = new WorkflowRunner( workflow );
-        const result = await runner.execute();
+        const pending = runner.execute();
+        await vi.runAllTimersAsync();
+        const result = await pending;
 
         expect( result.status ).toBe( 'completed' );
         expect( attempts ).toBe( 3 );
         expect( result.outputs.flaky_step ).toEqual( { success : true, attempts : 3 } );
+        vi.useRealTimers();
+    } );
+
+    it( 'rejects wait workflows without a checkpoint store (R24)', async () => 
+    {
+        const workflow = new Workflow( 'needs-store' );
+        workflow.wait( 'w1' );
+
+        const runner = new WorkflowRunner( workflow );
+
+        await expect( runner.execute() ).rejects.toThrow( /checkpointStore/ );
+    } );
+} );
+
+describe( 'Workflow branching and joins (AE6)', () => 
+{
+    it( 'runs only the chosen branch and joins with a completed-deps map', async () => 
+    {
+        const workflow = new Workflow( 'branch-join' );
+        const log: string[] = [];
+
+        workflow
+            .step( 'start', async () => 
+            {
+                log.push( 'start' );
+
+                return { n : 1 };
+            } )
+            .condition( 'cond', async () => {return true;}, {
+                ifTrue       : 'A',
+                ifFalse      : 'B',
+                dependencies : [ 'start' ]
+            } )
+            .step( 'A', async () => 
+            {
+                log.push( 'A' );
+
+                return { from : 'A' };
+            }, { dependencies : [ 'cond' ] } )
+            .step( 'B', async () => 
+            {
+                log.push( 'B' );
+
+                return { from : 'B' };
+            }, { dependencies : [ 'cond' ] } )
+            .step( 'D', async ( input ) => 
+            {
+                log.push( 'D' );
+
+                return input;
+            }, { dependencies : [ 'A', 'B' ] } );
+
+        const runner = new WorkflowRunner( workflow );
+        const result = await runner.execute();
+
+        expect( result.status ).toBe( 'completed' );
+        expect( log ).toEqual( [ 'start', 'A', 'D' ] );
+        expect( result.skippedSteps ).toContain( 'B' );
+        expect( result.outputs.D ).toEqual( { A : { from : 'A' } } );
+    } );
+} );
+
+describe( 'Workflow parallelism and failure (AE13)', () => 
+{
+    it( 'runs independent ready steps concurrently', async () => 
+    {
+        const workflow = new Workflow( 'parallel' );
+        let concurrent = 0;
+        let maxConcurrent = 0;
+
+        const bump = async ( id: string ): Promise<string> => 
+        {
+            concurrent++;
+            maxConcurrent = Math.max( maxConcurrent, concurrent );
+            await new Promise( ( r ) => {setTimeout( r, 20 );} );
+            concurrent--;
+
+            return id;
+        };
+
+        workflow
+            .step( 'A', async () => {return bump( 'A' );} )
+            .step( 'B', async () => {return bump( 'B' );} )
+            .step( 'C', async ( input ) => {return input;}, { dependencies : [ 'A', 'B' ] } );
+
+        const runner = new WorkflowRunner( workflow );
+        const result = await runner.execute();
+
+        expect( result.status ).toBe( 'completed' );
+        expect( maxConcurrent ).toBeGreaterThan( 1 );
+        expect( result.outputs.C ).toEqual( { A : 'A', B : 'B' } );
+    } );
+
+    it( 'signals siblings to stop when a parallel step fails (AE13)', async () => 
+    {
+        const workflow = new Workflow( 'fail-sibling' );
+        let bStarted = false;
+        let bSawAbort = false;
+
+        workflow
+            .step( 'A', async () => 
+            {
+                await new Promise( ( r ) => {setTimeout( r, 5 );} );
+                throw new Error( 'A failed' );
+            } )
+            .step( 'B', async ( _input, ctx ) => 
+            {
+                bStarted = true;
+
+                await new Promise<void>( ( resolve, reject ) => 
+                {
+                    const timer = setTimeout( () => {resolve();}, 100 );
+                    ctx.signal?.addEventListener( 'abort', () => 
+                    {
+                        bSawAbort = true;
+                        clearTimeout( timer );
+                        reject( ctx.signal?.reason ?? new Error( 'aborted' ) );
+                    }, { once : true } );
+                } );
+
+                return 'B done';
+            } );
+
+        const store = new MemoryDocStore();
+        const runner = new WorkflowRunner( workflow, { checkpointStore : store } );
+        const result = await runner.execute( {}, 'fail-run' );
+
+        expect( result.status ).toBe( 'failed' );
+        expect( bStarted ).toBe( true );
+        expect( bSawAbort ).toBe( true );
+
+        const saved = await store.get<{ status: string, error?: { message: string } }>( 
+            'workflow_checkpoints', 
+            'fail-run' 
+        );
+        expect( saved?.status ).toBe( 'failed' );
+        expect( saved?.error?.message ).toContain( 'A failed' );
+    } );
+} );
+
+describe( 'Workflow resume claims (AE7 / R54)', () => 
+{
+    it( 'rejects a concurrent resume claim (AE7)', async () => 
+    {
+        const store = new MemoryDocStore();
+        const workflow = new Workflow( 'claim' );
+
+        workflow
+            .step( 'prep', async () => {return 1;} )
+            .wait( 'w', { dependencies : [ 'prep' ] } )
+            .step( 'done', async () => {return 'ok';}, { dependencies : [ 'w' ] } );
+
+        const runner = new WorkflowRunner( workflow, { checkpointStore : store } );
+        await runner.execute( {}, 'claim-run' );
+
+        // Manually set claiming to simulate another process holding the claim.
+        const meta = await store.getWithMeta( 'workflow_checkpoints', 'claim-run' );
+        await store.conditionalWrite( 
+            'workflow_checkpoints', 
+            'claim-run', 
+            {
+                ...( meta!.doc as object ),
+                status : 'claiming',
+                claim  : { owner : 'other', claimedAt : Date.now() }
+            }, 
+            { expectedVersion : meta!.version } 
+        );
+
+        await expect( runner.resume( 'claim-run', { waitId : 'w', data : {} } ) )
+            .rejects
+            .toThrow( /takeover|claimed/i );
+
+        const takeover = await runner.resume( 'claim-run', {
+            waitId   : 'w',
+            data     : { ok : true },
+            takeover : true
+        } );
+
+        expect( takeover.status ).toBe( 'completed' );
     } );
 } );
