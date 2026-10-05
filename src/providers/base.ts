@@ -145,12 +145,15 @@ function isTimeoutAbort( signal: AbortSignal | undefined, error: unknown ): bool
             && reason.name === 'TimeoutError' );
 }
 
-export abstract class BaseProviderAdapter implements LanguageModel
+/**
+ * Shared HTTP transport (signal composition, timeouts, retries, error classification).
+ * Chat adapters and embedding adapters both build on it.
+ */
+export abstract class BaseTransport
 {
     public readonly provider : string;
     public readonly model    : string;
     readonly #config         : ModelConfig;
-    readonly #warnings       = new WarningEmitter();
 
     constructor( config: ModelConfig )
     {
@@ -163,147 +166,6 @@ export abstract class BaseProviderAdapter implements LanguageModel
     {
         return this.#config;
     }
-
-    /** Provider defaults; subclasses override. Config `capabilities` is merged on top. */
-    protected get defaultCapabilities(): ModelCapabilities
-    {
-        return NO_CAPABILITIES;
-    }
-
-    public get capabilities(): ModelCapabilities
-    {
-        const base = this.defaultCapabilities;
-        const override = this.#config.capabilities;
-
-        if( !override )
-        {
-            return base;
-        }
-
-        return {
-            ...base,
-            ...override,
-            multimodal : { ...base.multimodal, ...( override.multimodal ?? {} ) }
-        } as ModelCapabilities;
-    }
-
-    /** Parses and validates `structured` output on a completed non-stream response. */
-    protected withStructured( request: ModelRequest, response: ModelResponse ): ModelResponse
-    {
-        return attachStructured( this.provider, request, response );
-    }
-
-    /** True when message-level `cacheControl` breakpoints map to the wire format. */
-    protected get supportsMessageCacheControl(): boolean
-    {
-        return false;
-    }
-
-    /** True when request-level `promptCacheKey` maps to the wire format. */
-    protected get supportsPromptCacheKey(): boolean
-    {
-        return false;
-    }
-
-    /** Subscribe to adapter warnings (e.g. documented capability gaps). */
-    public onWarning( listener: WarningListener ): () => void
-    {
-        return this.#warnings.on( listener );
-    }
-
-    protected emitWarning( event: WarningEvent ): void
-    {
-        this.#warnings.emit( event );
-    }
-
-    /**
-     * Pre-flight capability gate. Runs before any HTTP so unsupported
-     * requests never silently degrade (R7, R25, R28).
-     */
-    protected assertRequestSupported( request: ModelRequest ): void
-    {
-        const caps = this.capabilities;
-
-        if( request.outputMode && !request.outputSchema )
-        {
-            throw new InvalidInputError( `outputMode '${request.outputMode}' requires an outputSchema` );
-        }
-
-        if( request.outputSchema && !caps.structuredOutput )
-        {
-            throw new CapabilityError( 
-                this.provider, 
-                'structuredOutput', 
-                `model '${this.model}' cannot honor outputSchema` 
-            );
-        }
-
-        for( const msg of request.messages )
-        {
-            if( msg.cacheControl && !( caps.promptCacheControl && this.supportsMessageCacheControl ) )
-            {
-                throw new CapabilityError( 
-                    this.provider, 
-                    'promptCacheControl', 
-                    'message cacheControl is not supported' 
-                );
-            }
-
-            if( msg.reasoningContent !== undefined && msg.role !== 'assistant' )
-            {
-                throw new InvalidInputError( 
-                    `reasoningContent is only valid on assistant messages (got '${msg.role}')` 
-                );
-            }
-
-            assertAttachmentRole( msg.role, msg.attachments );
-
-            for( const att of msg.attachments ?? [] )
-            {
-                this.assertAttachmentSupported( att.type );
-            }
-        }
-
-        if( request.promptCacheKey && !( caps.promptCacheControl && this.supportsPromptCacheKey ) )
-        {
-            throw new CapabilityError( 
-                this.provider, 
-                'promptCacheControl', 
-                'promptCacheKey is not supported' 
-            );
-        }
-    }
-
-    protected assertAttachmentSupported( type: AttachmentType ): void
-    {
-        if( !this.capabilities.multimodal[type] )
-        {
-            throw new CapabilityError( 
-                this.provider, 
-                `multimodal.${type}`, 
-                `attachment type '${type}' is not supported by ${this.provider}` 
-            );
-        }
-    }
-
-    /**
-     * Wraps a raw chunk source: parses and validates streamed tool calls once the
-     * stream ends. Adapters call this from `stream()` around their wire parser.
-     */
-    protected finalizeChunks( 
-        request: ModelRequest, 
-        source: AsyncIterable<ModelStreamChunk> 
-    ): AsyncIterable<ModelStreamChunk>
-    {
-        return finalizeStream( source, { 
-            provider     : this.provider, 
-            tools        : request.tools, 
-            outputSchema : request.outputSchema 
-        } );
-    }
-
-    public abstract generate( request: ModelRequest ): Promise<ModelResponse>;
-    public abstract stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>;
 
     protected getApiKey( envVar?: string ): string
     {
@@ -833,4 +695,150 @@ export abstract class BaseProviderAdapter implements LanguageModel
             }
         } );
     }
+}
+
+export abstract class BaseProviderAdapter extends BaseTransport implements LanguageModel
+{
+    readonly #warnings = new WarningEmitter();
+
+    /** Provider defaults; subclasses override. Config `capabilities` is merged on top. */
+    protected get defaultCapabilities(): ModelCapabilities
+    {
+        return NO_CAPABILITIES;
+    }
+
+    public get capabilities(): ModelCapabilities
+    {
+        const base = this.defaultCapabilities;
+        const override = this.config.capabilities;
+
+        if( !override )
+        {
+            return base;
+        }
+
+        return {
+            ...base,
+            ...override,
+            multimodal : { ...base.multimodal, ...( override.multimodal ?? {} ) }
+        } as ModelCapabilities;
+    }
+
+    /** Parses and validates `structured` output on a completed non-stream response. */
+    protected withStructured( request: ModelRequest, response: ModelResponse ): ModelResponse
+    {
+        return attachStructured( this.provider, request, response );
+    }
+
+    /** True when message-level `cacheControl` breakpoints map to the wire format. */
+    protected get supportsMessageCacheControl(): boolean
+    {
+        return false;
+    }
+
+    /** True when request-level `promptCacheKey` maps to the wire format. */
+    protected get supportsPromptCacheKey(): boolean
+    {
+        return false;
+    }
+
+    /** Subscribe to adapter warnings (e.g. documented capability gaps). */
+    public onWarning( listener: WarningListener ): () => void
+    {
+        return this.#warnings.on( listener );
+    }
+
+    protected emitWarning( event: WarningEvent ): void
+    {
+        this.#warnings.emit( event );
+    }
+
+    /**
+     * Pre-flight capability gate. Runs before any HTTP so unsupported
+     * requests never silently degrade (R7, R25, R28).
+     */
+    protected assertRequestSupported( request: ModelRequest ): void
+    {
+        const caps = this.capabilities;
+
+        if( request.outputMode && !request.outputSchema )
+        {
+            throw new InvalidInputError( `outputMode '${request.outputMode}' requires an outputSchema` );
+        }
+
+        if( request.outputSchema && !caps.structuredOutput )
+        {
+            throw new CapabilityError( 
+                this.provider, 
+                'structuredOutput', 
+                `model '${this.model}' cannot honor outputSchema` 
+            );
+        }
+
+        for( const msg of request.messages )
+        {
+            if( msg.cacheControl && !( caps.promptCacheControl && this.supportsMessageCacheControl ) )
+            {
+                throw new CapabilityError( 
+                    this.provider, 
+                    'promptCacheControl', 
+                    'message cacheControl is not supported' 
+                );
+            }
+
+            if( msg.reasoningContent !== undefined && msg.role !== 'assistant' )
+            {
+                throw new InvalidInputError( 
+                    `reasoningContent is only valid on assistant messages (got '${msg.role}')` 
+                );
+            }
+
+            assertAttachmentRole( msg.role, msg.attachments );
+
+            for( const att of msg.attachments ?? [] )
+            {
+                this.assertAttachmentSupported( att.type );
+            }
+        }
+
+        if( request.promptCacheKey && !( caps.promptCacheControl && this.supportsPromptCacheKey ) )
+        {
+            throw new CapabilityError( 
+                this.provider, 
+                'promptCacheControl', 
+                'promptCacheKey is not supported' 
+            );
+        }
+    }
+
+    protected assertAttachmentSupported( type: AttachmentType ): void
+    {
+        if( !this.capabilities.multimodal[type] )
+        {
+            throw new CapabilityError( 
+                this.provider, 
+                `multimodal.${type}`, 
+                `attachment type '${type}' is not supported by ${this.provider}` 
+            );
+        }
+    }
+
+    /**
+     * Wraps a raw chunk source: parses and validates streamed tool calls once the
+     * stream ends. Adapters call this from `stream()` around their wire parser.
+     */
+    protected finalizeChunks( 
+        request: ModelRequest, 
+        source: AsyncIterable<ModelStreamChunk> 
+    ): AsyncIterable<ModelStreamChunk>
+    {
+        return finalizeStream( source, { 
+            provider     : this.provider, 
+            tools        : request.tools, 
+            outputSchema : request.outputSchema 
+        } );
+    }
+
+    public abstract generate( request: ModelRequest ): Promise<ModelResponse>;
+    public abstract stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>;
 }
