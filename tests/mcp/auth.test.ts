@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import 
 {
     MCPAuthError,
+    MCPClient,
+    StreamableHTTPTransport,
     applyAuth,
     authorizedFetch,
     formatBearerChallenge,
@@ -242,5 +244,89 @@ describe( 'authorizedFetch 401/403 rule (R16, R17)', () =>
         const fetchImpl = vi.fn( async () => {return new Response( null, { status : 403 } );} ) as unknown as typeof fetch;
 
         await expect( run( fetchImpl, {}, 'not a url' ) ).rejects.toMatchObject( { details : expect.objectContaining( { url : '<invalid url>' } ) } );
+    } );
+} );
+
+describe( 'StreamableHTTPTransport auth integration (R15-R17)', () => 
+{
+    const init = { protocolVersion : '2025-06-18', capabilities : { tools : {} }, serverInfo : { name : 's', version : '1' } };
+
+    function bearerServer( validToken: string ): { fetch: typeof fetch, seen: Array<string | null> }
+    {
+        const seen: Array<string | null> = [];
+        const impl = async ( _url: unknown, init2?: RequestInit ): Promise<Response> => 
+        {
+            const headers = new Headers( init2?.headers );
+            seen.push( headers.get( 'authorization' ) );
+
+            if( headers.get( 'authorization' ) !== `Bearer ${validToken}` )
+            {
+                return new Response( 'denied', { status : 401, headers : { 'www-authenticate' : 'Bearer error="invalid_token", resource_metadata="https://mcp.example/meta"' } } );
+            }
+
+            const body = JSON.parse( init2?.body as string ) as { id?: number };
+
+            return body.id === undefined
+                ? new Response( null, { status : 202 } )
+                : jsonResponse( { jsonrpc : '2.0', id : body.id, result : init } );
+        };
+
+        return { fetch : impl as unknown as typeof fetch, seen };
+    }
+
+    it( 'AE8: refreshes once on 401 through the transport and then connects', async () => 
+    {
+        const { fetch: fetchImpl, seen } = bearerServer( 'fresh' );
+        let token = 'stale';
+        const onUnauthorized = vi.fn( async () => 
+        {
+            token = 'fresh';
+
+            return true;
+        } );
+        const client = new MCPClient( new StreamableHTTPTransport( 'https://mcp.example/rpc', { 
+            fetch        : fetchImpl, 
+            authProvider : { getHeaders : async () => {return { authorization : `Bearer ${token}` };}, onUnauthorized } 
+        } ) );
+
+        await client.connect();
+
+        expect( seen.slice( 0, 2 ) ).toEqual( [ 'Bearer stale', 'Bearer fresh' ] );
+        expect( seen.every( ( v, i ) => {return i === 0 || v === 'Bearer fresh';} ) ).toBe( true );
+        expect( onUnauthorized ).toHaveBeenCalledTimes( 1 );
+    } );
+
+    it( 'a persistent 401 rejects connect() with MCPAuthError carrying the challenge, and closes', async () => 
+    {
+        const { fetch: fetchImpl } = bearerServer( 'never' );
+        const client = new MCPClient( new StreamableHTTPTransport( 'https://mcp.example/rpc', { 
+            fetch        : fetchImpl, 
+            authProvider : { getHeaders : async () => {return { authorization : 'Bearer wrong' };}, onUnauthorized : async () => {return true;} } 
+        } ) );
+
+        const failure = await client.connect().catch( ( e: unknown ) => {return e;} );
+
+        expect( failure ).toBeInstanceOf( MCPAuthError );
+        expect( failure ).toMatchObject( { code : 'MCP_UNAUTHORIZED', resourceMetadata : 'https://mcp.example/meta' } );
+        expect( `${( failure as Error ).message}${JSON.stringify( ( failure as MCPAuthError ).details )}` ).not.toContain( 'wrong' );
+    } );
+
+    it( 'static headers are sent with every request', async () => 
+    {
+        const { fetch: fetchImpl, seen } = bearerServer( 'static' );
+        const client = new MCPClient( new StreamableHTTPTransport( 'https://mcp.example/rpc', { fetch : fetchImpl, headers : { Authorization : 'Bearer static' } } ) );
+
+        await client.connect();
+        await client.close();
+
+        expect( seen.length ).toBeGreaterThanOrEqual( 2 );
+        expect( seen.every( ( v ) => {return v === 'Bearer static';} ) ).toBe( true );
+    } );
+
+    it( '403 rejects connect() with MCP_FORBIDDEN', async () => 
+    {
+        const client = new MCPClient( new StreamableHTTPTransport( 'https://mcp.example/rpc', { fetch : ( async () => {return new Response( null, { status : 403 } );} ) as unknown as typeof fetch } ) );
+
+        await expect( client.connect() ).rejects.toMatchObject( { code : 'MCP_FORBIDDEN', status : 403 } );
     } );
 } );
