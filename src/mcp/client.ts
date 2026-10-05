@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { ToolDefinition } from '../core/types.js';
 import { AIError } from '../core/error.js';
-import { parseSSEStream } from '../core/stream.js';
 import { createNDJSONDecoder } from '../core/ndjson.js';
 import type { 
     JSONRPCMessage, 
@@ -235,127 +234,7 @@ export class StdioTransport implements MCPTransport
     }
 }
 
-export class SSETransport implements MCPTransport
-{
-    readonly #endpointUrl: string;
-    #postUrl?: string;
-    #handler?: ( message: JSONRPCMessage ) => void;
-    #closeHandler?: () => void;
-    #abortController?: AbortController;
-
-    constructor( endpointUrl: string )
-    {
-        this.#endpointUrl = endpointUrl;
-    }
-
-    public async connect(): Promise<void>
-    {
-        this.#abortController = new AbortController();
-
-        const response = await fetch( this.#endpointUrl, 
-            {
-                headers : { Accept : 'text/event-stream' },
-                signal  : this.#abortController.signal
-            } );
-
-        if( !response.ok || !response.body )
-        {
-            throw new AIError( 
-                `Failed to connect to MCP SSE endpoint: HTTP ${response.status}`, 
-                'MCP_TRANSPORT_ERROR' 
-            );
-        }
-
-        this.listenStream( response.body );
-    }
-
-    public async send( message: JSONRPCMessage ): Promise<void>
-    {
-        const url = this.#postUrl ?? this.#endpointUrl;
-
-        const response = await fetch( url, 
-            {
-                method  : 'POST',
-                headers : { 'Content-Type' : 'application/json' },
-                body    : JSON.stringify( message )
-            } );
-
-        if( !response.ok )
-        {
-            throw new AIError( 
-                `MCP send failed: HTTP ${response.status}`, 
-                'MCP_TRANSPORT_ERROR' 
-            );
-        }
-    }
-
-    public async close(): Promise<void>
-    {
-        if( !this.#abortController )
-        {
-            return;
-        }
-
-        const controller = this.#abortController;
-        this.#abortController = undefined;
-        controller.abort();
-        this.#closeHandler?.();
-    }
-
-    public onMessage( handler: ( message: JSONRPCMessage ) => void ): void
-    {
-        this.#handler = handler;
-    }
-
-    public onClose( handler: () => void ): void
-    {
-        this.#closeHandler = handler;
-    }
-
-    private async listenStream( stream: ReadableStream<Uint8Array> ): Promise<void>
-    {
-        try
-        {
-            for await ( const event of parseSSEStream( stream ) )
-            {
-                if( event.event === 'endpoint' && event.data )
-                {
-                    this.#postUrl = new URL( event.data, this.#endpointUrl ).toString();
-                    continue;
-                }
-
-                if( event.data )
-                {
-                    try
-                    {
-                        const msg = JSON.parse( event.data ) as JSONRPCMessage;
-
-                        if( this.#handler )
-                        {
-                            this.#handler( msg );
-                        }
-                    }
-                    catch
-                    {
-                        // Ignore malformed chunks
-                    }
-                }
-            }
-        }
-        catch
-        {
-            // Stream closed
-        }
-        finally
-        {
-            if( this.#abortController )
-            {
-                this.#abortController = undefined;
-                this.#closeHandler?.();
-            }
-        }
-    }
-}
+export { SSETransport, type SSETransportOptions } from './sse-transport.js';
 
 export interface MCPClientOptions
 {

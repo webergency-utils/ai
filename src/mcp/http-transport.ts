@@ -1,6 +1,7 @@
 import { AIError } from '../core/error.js';
 import { parseSSEStream } from '../core/stream.js';
 import { authorizedFetch, type MCPAuthOptions } from './auth.js';
+import { MAX_ERROR_BODY_CHARS, readTruncated } from './http-util.js';
 import type { JSONRPCMessage, JSONRPCResponse, MCPTransport } from './types.js';
 
 export interface StreamableHTTPTransportOptions extends MCPAuthOptions
@@ -13,8 +14,6 @@ export interface StreamableHTTPTransportOptions extends MCPAuthOptions
     closeTimeoutMs? : number
 }
 
-const MAX_ERROR_BODY_CHARS = 200;
-
 function protocolError( message: string, details?: unknown ): AIError
 {
     return new AIError( message, 'MCP_PROTOCOL_ERROR', details );
@@ -23,43 +22,6 @@ function protocolError( message: string, details?: unknown ): AIError
 function isResponseFor( message: JSONRPCMessage, id: string | number ): message is JSONRPCResponse
 {
     return !( 'method' in message ) && 'id' in message && message.id === id;
-}
-
-async function readTruncated( response: Response, maxChars: number ): Promise<string>
-{
-    if( !response.body )
-    {
-        return '';
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let text = '';
-
-    try
-    {
-        while( text.length < maxChars )
-        {
-            const { done, value } = await reader.read();
-
-            if( done )
-            {
-                break;
-            }
-
-            text += decoder.decode( value, { stream : true } );
-        }
-    }
-    catch
-    {
-        // A broken body must not hide the HTTP status we are about to report.
-    }
-    finally
-    {
-        await reader.cancel().catch( () => {} );
-    }
-
-    return text.length > maxChars ? `${text.slice( 0, maxChars )}…` : text;
 }
 
 /**
