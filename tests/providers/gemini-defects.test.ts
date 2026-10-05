@@ -90,7 +90,7 @@ describe( 'GeminiProviderAdapter correctness defects', () =>
         const event = 'data: {"candidates":[{"content":{"parts":['
             + '{"functionCall":{"name":"alpha","args":{"a":1}}},'
             + '{"functionCall":{"name":"beta","args":{"b":2}}}'
-            + ']}}]}\n\n';
+            + ']},"finishReason":"STOP"}]}\n\n';
 
         vi.mocked( fetch ).mockResolvedValue( sseResponse( [ event ] ) );
 
