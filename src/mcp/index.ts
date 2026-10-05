@@ -5,4 +5,5 @@ export * from './client.js';
 export * from './http-transport.js';
 export * from './connect.js';
 export * from './server.js';
+export * from './http-handler.js';
 export * from './tools.js';
