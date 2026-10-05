@@ -1,0 +1,37 @@
+name: Fuzzing
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 0 * * 0'
+
+permissions: read-all
+
+jobs:
+  fuzz:
+    name: Jazzer.js Fuzzing
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Fuzz stream parsers
+        run: node scripts/run-fuzz.mjs fuzz_stream.cjs -- -runs=10000 -max_total_time=300
+
+      - name: Fuzz schema / spend / vector
+        run: node scripts/run-fuzz.mjs fuzz_ai.cjs -- -runs=10000 -max_total_time=300

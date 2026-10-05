@@ -1,0 +1,102 @@
+{
+    "name": "@webergency-utils/ai",
+    "version": "0.1.0",
+    "description": "High-performance developer-first AI toolkit with multimodal support, dynamic provider imports, abstract storage, spend calculation, MCP, and agentic workflows",
+    "author": "radixxko",
+    "license": "MIT",
+    "type": "module",
+    "publishConfig": {
+        "access": "public"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/webergency-utils/ai.git"
+    },
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        },
+        "./core": {
+            "types": "./dist/core/index.d.ts",
+            "import": "./dist/core/index.js"
+        },
+        "./providers": {
+            "types": "./dist/providers/index.d.ts",
+            "import": "./dist/providers/index.js"
+        },
+        "./storage": {
+            "types": "./dist/storage/index.d.ts",
+            "import": "./dist/storage/index.js"
+        },
+        "./mcp": {
+            "types": "./dist/mcp/index.d.ts",
+            "import": "./dist/mcp/index.js"
+        },
+        "./spend": {
+            "types": "./dist/spend/index.d.ts",
+            "import": "./dist/spend/index.js"
+        },
+        "./agent": {
+            "types": "./dist/agent/index.d.ts",
+            "import": "./dist/agent/index.js"
+        },
+        "./workflow": {
+            "types": "./dist/workflow/index.d.ts",
+            "import": "./dist/workflow/index.js"
+        },
+        "./trace": {
+            "types": "./dist/trace/index.d.ts",
+            "import": "./dist/trace/index.js"
+        }
+    },
+    "files": [
+        "dist/**/*"
+    ],
+    "scripts": {
+        "build": "tsc",
+        "clean": "rm -rf ./dist",
+        "prepack": "npm run clean && npm run build",
+        "lint": "eslint \"src/**/*.ts\"",
+        "lint:fix": "eslint \"src/**/*.ts\" --fix",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "fuzz": "npm run build && node scripts/run-fuzz.mjs fuzz_stream.cjs -- -runs=1000 -max_total_time=60",
+        "fuzz:legacy": "npm run build && node scripts/run-fuzz.mjs fuzz_ai.cjs -- -runs=1000 -max_total_time=60"
+    },
+    "dependencies": {
+        "@webergency-utils/typechecker": "^0.8.1"
+    },
+    "devDependencies": {
+        "@eslint/js": "^10.0.1",
+        "@jazzer.js/core": "^2.1.0",
+        "@stylistic/eslint-plugin": "^5.10.0",
+        "@types/node": "^24.0.10",
+        "eslint": "^10.2.0",
+        "typescript": "^5.8.3",
+        "typescript-eslint": "^8.58.1",
+        "vitest": "^3.1.4"
+    },
+    "peerDependencies": {
+        "@anthropic-ai/sdk": ">=0.30.0",
+        "@google/genai": ">=0.1.0",
+        "ollama": ">=0.5.0",
+        "openai": ">=4.0.0"
+    },
+    "peerDependenciesMeta": {
+        "@anthropic-ai/sdk": {
+            "optional": true
+        },
+        "@google/genai": {
+            "optional": true
+        },
+        "openai": {
+            "optional": true
+        },
+        "ollama": {
+            "optional": true
+        }
+    }
+}
