@@ -275,7 +275,7 @@ export class LocalDiskFileStore implements IFileStore
                 let settled = false;
                 const fail = ( err: unknown ): void => 
                 {
-                    if( settled ){ return }
+                    if( settled ){return;}
 
                     settled = true;
                     writeStream.destroy();
@@ -283,7 +283,7 @@ export class LocalDiskFileStore implements IFileStore
                 };
                 const ok = (): void => 
                 {
-                    if( settled ){ return }
+                    if( settled ){return;}
 
                     settled = true;
                     resolve();

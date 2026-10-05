@@ -217,14 +217,14 @@ export class SpendCalculator
             return {
                 model,
                 provider,
-                inputCost   : 0,
-                outputCost  : 0,
-                totalCost   : 0,
-                currency    : 'USD',
+                inputCost  : 0,
+                outputCost : 0,
+                totalCost  : 0,
+                currency   : 'USD',
                 usage,
-                free        : true,
-                pricingKey  : resolution.key,
-                gaps        : gaps.length > 0 ? gaps : undefined
+                free       : true,
+                pricingKey : resolution.key,
+                gaps       : gaps.length > 0 ? gaps : undefined
             };
         }
 
@@ -300,17 +300,17 @@ export class SpendCalculator
 
         return {
             model,
-            provider       : meta.provider ?? pricing.provider,
+            provider   : meta.provider ?? pricing.provider,
             inputCost,
             outputCost,
             cacheReadCost,
             cacheWriteCost,
             reasoningCost,
             totalCost,
-            currency       : 'USD',
+            currency   : 'USD',
             usage,
-            pricingKey     : meta.pricingKey,
-            gaps           : meta.gaps.length > 0 ? meta.gaps : undefined
+            pricingKey : meta.pricingKey,
+            gaps       : meta.gaps.length > 0 ? meta.gaps : undefined
         };
     }
 }

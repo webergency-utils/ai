@@ -118,7 +118,7 @@ export class Agent
             {
                 if( options.interrupted === 'abandon' )
                 {
-                    return this.#abandon( latest, options );
+                    return this.#abandon( latest );
                 }
 
                 throw new Error( 
@@ -152,19 +152,18 @@ export class Agent
         }
 
         return this.#executeRun( {
-            input     : latest.originalInput ?? [],
+            input      : latest.originalInput ?? [],
             threadId,
-            agentId   : options.agentId ?? 'agent_default',
-            collector : options.collector ?? this.#collector,
-            options   : { ...options, threadId },
-            hydrate   : true,
-            checkpoint: latest
+            agentId    : options.agentId ?? 'agent_default',
+            collector  : options.collector ?? this.#collector,
+            options    : { ...options, threadId },
+            hydrate    : true,
+            checkpoint : latest
         } );
     }
 
     async #abandon( 
-        latest: NonNullable<Awaited<ReturnType<CheckpointManager['getLatestCheckpoint']>>>, 
-        options: AgentRunOptions 
+        latest: NonNullable<Awaited<ReturnType<CheckpointManager['getLatestCheckpoint']>>>
     ): Promise<AgentResult>
     {
         const messages = [ ...latest.messages ];

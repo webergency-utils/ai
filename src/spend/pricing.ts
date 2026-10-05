@@ -133,40 +133,40 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> =
         },
 
         'anthropic:claude-3-7-sonnet-20250219' : {
-            provider                : 'anthropic',
-            inputPerMillion         : 3.00,
-            outputPerMillion        : 15.00,
-            cacheReadPerMillion     : 0.30,
-            cacheWritePerMillion    : 3.75,
-            cacheWrite5mPerMillion  : 3.75,
-            cacheWrite1hPerMillion  : 6.00
+            provider               : 'anthropic',
+            inputPerMillion        : 3.00,
+            outputPerMillion       : 15.00,
+            cacheReadPerMillion    : 0.30,
+            cacheWritePerMillion   : 3.75,
+            cacheWrite5mPerMillion : 3.75,
+            cacheWrite1hPerMillion : 6.00
         },
         'anthropic:claude-3-5-sonnet-20241022' : {
-            provider                : 'anthropic',
-            inputPerMillion         : 3.00,
-            outputPerMillion        : 15.00,
-            cacheReadPerMillion     : 0.30,
-            cacheWritePerMillion    : 3.75,
-            cacheWrite5mPerMillion  : 3.75,
-            cacheWrite1hPerMillion  : 6.00
+            provider               : 'anthropic',
+            inputPerMillion        : 3.00,
+            outputPerMillion       : 15.00,
+            cacheReadPerMillion    : 0.30,
+            cacheWritePerMillion   : 3.75,
+            cacheWrite5mPerMillion : 3.75,
+            cacheWrite1hPerMillion : 6.00
         },
         'anthropic:claude-3-5-haiku-20241022' : {
-            provider                : 'anthropic',
-            inputPerMillion         : 0.80,
-            outputPerMillion        : 4.00,
-            cacheReadPerMillion     : 0.08,
-            cacheWritePerMillion    : 1.00,
-            cacheWrite5mPerMillion  : 1.00,
-            cacheWrite1hPerMillion  : 1.60
+            provider               : 'anthropic',
+            inputPerMillion        : 0.80,
+            outputPerMillion       : 4.00,
+            cacheReadPerMillion    : 0.08,
+            cacheWritePerMillion   : 1.00,
+            cacheWrite5mPerMillion : 1.00,
+            cacheWrite1hPerMillion : 1.60
         },
         'anthropic:claude-3-opus-20240229' : {
-            provider                : 'anthropic',
-            inputPerMillion         : 15.00,
-            outputPerMillion        : 75.00,
-            cacheReadPerMillion     : 1.50,
-            cacheWritePerMillion    : 18.75,
-            cacheWrite5mPerMillion  : 18.75,
-            cacheWrite1hPerMillion  : 30.00
+            provider               : 'anthropic',
+            inputPerMillion        : 15.00,
+            outputPerMillion       : 75.00,
+            cacheReadPerMillion    : 1.50,
+            cacheWritePerMillion   : 18.75,
+            cacheWrite5mPerMillion : 18.75,
+            cacheWrite1hPerMillion : 30.00
         },
 
         'gemini:gemini-2.5-flash' : {
@@ -530,7 +530,7 @@ export class LocalPricingRegistry extends PricingRegistry
 
     public async refresh(): Promise<void>
     {
-        if( !this.#updater ){ return }
+        if( !this.#updater ){return;}
 
         try
         {
@@ -571,7 +571,7 @@ export class LocalPricingRegistry extends PricingRegistry
         {
             this.refresh().catch( ( err ) => 
             {
-                if( this.#onError ){ this.#onError( err ) }
+                if( this.#onError ){this.#onError( err );}
             } );
         }, ms );
 

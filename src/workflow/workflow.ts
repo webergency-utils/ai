@@ -93,11 +93,11 @@ export class Workflow
         // Sugar over named-branch routing (KTD6).
         this.#nodes.set( id, {
             id,
-            type         : 'condition',
+            type          : 'condition',
             predicate,
-            ifTrue       : options.ifTrue,
-            ifFalse      : options.ifFalse,
-            dependencies : options.dependencies ?? [],
+            ifTrue        : options.ifTrue,
+            ifFalse       : options.ifFalse,
+            dependencies  : options.dependencies ?? [],
             branchTargets : [ options.ifTrue, options.ifFalse ]
         } );
 

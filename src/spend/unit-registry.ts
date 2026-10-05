@@ -20,25 +20,25 @@ export type UnitCostChangeListener = ( event: UnitCostChangeEvent ) => void;
 
 export const DEFAULT_UNIT_PRICING: Record<string, number> = 
     {
-        'storage:vector_query'     : 0.0001,
-        'storage:vector_write'     : 0.00025,
-        'storage:doc_read'         : 0.000005,
-        'storage:doc_write'        : 0.00002,
-        'storage:cache_read'       : 0.000001,
-        'storage:cache_write'      : 0.000002,
-        'storage:file_transfer_mb' : 0.00002,
-        'storage:bytes'            : 0.00000000002,
+        'storage:vector_query'      : 0.0001,
+        'storage:vector_write'      : 0.00025,
+        'storage:doc_read'          : 0.000005,
+        'storage:doc_write'         : 0.00002,
+        'storage:cache_read'        : 0.000001,
+        'storage:cache_write'       : 0.000002,
+        'storage:file_transfer_mb'  : 0.00002,
+        'storage:bytes'             : 0.00000000002,
         // Declared free class for in-memory backends (KTD4) — not an unpriced gap.
-        'storage:memory'           : 0,
-        'storage:memory:bytes'     : 0,
-        'storage:memory:operations': 0,
-        'compute:sandbox_sec'      : 0.00005,
-        'compute:seconds'          : 0.00005,
-        'compute:durationMs'       : 0.00000005,
-        'network:bytes'            : 0.00000000009,
-        'network:egress_mb'        : 0.00009,
-        'mcp:call'                 : 0.0005,
-        'tools:call'               : 0.0001
+        'storage:memory'            : 0,
+        'storage:memory:bytes'      : 0,
+        'storage:memory:operations' : 0,
+        'compute:sandbox_sec'       : 0.00005,
+        'compute:seconds'           : 0.00005,
+        'compute:durationMs'        : 0.00000005,
+        'network:bytes'             : 0.00000000009,
+        'network:egress_mb'         : 0.00009,
+        'mcp:call'                  : 0.0005,
+        'tools:call'                : 0.0001
     };
 
 /** Explicit free rates for in-memory storage (KTD4). */

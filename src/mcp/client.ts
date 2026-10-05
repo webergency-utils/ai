@@ -602,7 +602,7 @@ export class MCPClient
         return new Promise<JSONRPCResponse>( ( resolve, reject ) => 
         {
             let settled = false;
-            let onAbort: ( () => void ) | undefined;
+            const abortHook: { handler?: () => void } = {};
 
             const finish = ( res?: JSONRPCResponse, err?: Error ): void => 
             {
@@ -621,9 +621,9 @@ export class MCPClient
 
                 this.#pendingRequests.delete( id );
 
-                if( onAbort )
+                if( abortHook.handler )
                 {
-                    options.signal?.removeEventListener( 'abort', onAbort );
+                    options.signal?.removeEventListener( 'abort', abortHook.handler );
                 }
 
                 if( err )
@@ -636,7 +636,7 @@ export class MCPClient
                 }
             };
 
-            onAbort = (): void => 
+            abortHook.handler = (): void => 
             {
                 void this.#sendCancelled( id, method );
                 finish( undefined, new AIError( `MCP request '${method}' aborted`, 'MCP_REQUEST_ABORTED', { id, method } ) );
@@ -644,7 +644,7 @@ export class MCPClient
 
             if( options.signal?.aborted )
             {
-                onAbort();
+                abortHook.handler();
 
                 return;
             }
@@ -662,13 +662,13 @@ export class MCPClient
                 : undefined;
 
             this.#pendingRequests.set( id, {
-                resolve : ( res ) => { finish( res ); },
-                reject  : ( err ) => { finish( undefined, err ); },
+                resolve : ( res ) => {finish( res );},
+                reject  : ( err ) => {finish( undefined, err );},
                 method,
                 timer
             } );
 
-            options.signal?.addEventListener( 'abort', onAbort, { once : true } );
+            options.signal?.addEventListener( 'abort', abortHook.handler, { once : true } );
 
             this.#transport.send( req ).catch( ( err: unknown ) => 
             {

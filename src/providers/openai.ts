@@ -84,8 +84,8 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
         const transport = this.resolveTransportOptions( request );
 
         const response = await this.request( {
-            url    : `${this.#baseUrl}/chat/completions`,
-            init   : {
+            url  : `${this.#baseUrl}/chat/completions`,
+            init : {
                 method  : 'POST',
                 headers : {
                     'Content-Type'  : 'application/json',
@@ -121,8 +121,8 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
         const transport = this.resolveTransportOptions( request );
 
         const response = await this.request( {
-            url    : `${this.#baseUrl}/chat/completions`,
-            init   : {
+            url  : `${this.#baseUrl}/chat/completions`,
+            init : {
                 method  : 'POST',
                 headers : {
                     'Content-Type'  : 'application/json',

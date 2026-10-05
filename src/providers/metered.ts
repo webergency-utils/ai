@@ -67,7 +67,6 @@ export class MeteredModel implements ModelProtocol
         this.#preflight();
 
         let usage: ModelResponse['usage'];
-        let usageMissing = false;
         let sawChunk = false;
 
         try
@@ -104,10 +103,9 @@ export class MeteredModel implements ModelProtocol
         }
         else
         {
-            usageMissing = true;
             this.#tracker.recordSpendGap( 
                 `Stream completed without usage for ${this.provider}:${this.model}`, 
-                { provider : this.provider, model : this.model, usageMissing }, 
+                { provider : this.provider, model : this.model, usageMissing : true }, 
                 { threadId : this.#threadId, agentId : this.#agentId } 
             );
         }

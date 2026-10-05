@@ -9,25 +9,25 @@ import {
 } from '../core/error.js';
 
 export type RequestAttemptInfo =
-{
-    attempt     : number
-    maxAttempts : number
-    error?      : unknown
-    delayMs?    : number
-}
+    {
+        attempt     : number
+        maxAttempts : number
+        error?      : unknown
+        delayMs?    : number
+    }
 
 export type TransportRequestOptions =
-{
-    url     : string
-    init    : RequestInit
-    /** When true, do not retry after a successful HTTP response (stream body started). */
-    stream? : boolean
-    signal? : AbortSignal
-    timeoutMs?     : number
-    idleTimeoutMs? : number
-    maxRetries?    : number
-    onAttempt?     : ( info: RequestAttemptInfo ) => void
-}
+    {
+        url     : string
+        init    : RequestInit
+        /** When true, do not retry after a successful HTTP response (stream body started). */
+        stream? : boolean
+        signal? : AbortSignal
+        timeoutMs?     : number
+        idleTimeoutMs? : number
+        maxRetries?    : number
+        onAttempt?     : ( info: RequestAttemptInfo ) => void
+    }
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 60_000;
@@ -196,8 +196,8 @@ export abstract class BaseProviderAdapter implements ModelProtocol
                 options.onAttempt?.( {
                     attempt,
                     maxAttempts,
-                    error  : lastError,
-                    delayMs: undefined
+                    error   : lastError,
+                    delayMs : undefined
                 } );
             }
 
@@ -272,9 +272,9 @@ export abstract class BaseProviderAdapter implements ModelProtocol
                 }
 
                 options.onAttempt?.( {
-                    attempt     : attempt + 1,
+                    attempt : attempt + 1,
                     maxAttempts,
-                    error       : classified,
+                    error   : classified,
                     delayMs
                 } );
 
@@ -312,7 +312,7 @@ export abstract class BaseProviderAdapter implements ModelProtocol
                     }
 
                     options.onAttempt?.( {
-                        attempt     : attempt + 1,
+                        attempt : attempt + 1,
                         maxAttempts,
                         error,
                         delayMs
@@ -343,9 +343,9 @@ export abstract class BaseProviderAdapter implements ModelProtocol
                         lastError = timeout;
                         const delayMs = computeBackoffMs( attempt - 1 );
                         options.onAttempt?.( {
-                            attempt     : attempt + 1,
+                            attempt : attempt + 1,
                             maxAttempts,
-                            error       : timeout,
+                            error   : timeout,
                             delayMs
                         } );
                         await this.#sleep( delayMs, callerSignal );
@@ -361,7 +361,7 @@ export abstract class BaseProviderAdapter implements ModelProtocol
                     lastError = error;
                     const delayMs = computeBackoffMs( attempt - 1 );
                     options.onAttempt?.( {
-                        attempt     : attempt + 1,
+                        attempt : attempt + 1,
                         maxAttempts,
                         error,
                         delayMs
@@ -387,13 +387,13 @@ export abstract class BaseProviderAdapter implements ModelProtocol
         const retry = request.retry;
 
         return {
-            signal         : request.signal,
-            timeoutMs      : request.timeoutMs ?? this.#config.timeoutMs,
-            idleTimeoutMs  : request.idleTimeoutMs ?? this.#config.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS,
-            maxRetries     : retry === false 
+            signal        : request.signal,
+            timeoutMs     : request.timeoutMs ?? this.#config.timeoutMs,
+            idleTimeoutMs : request.idleTimeoutMs ?? this.#config.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS,
+            maxRetries    : retry === false 
                 ? 0 
                 : ( retry?.maxRetries ?? this.#config.maxRetries ),
-            onAttempt      : request.onAttempt
+            onAttempt : request.onAttempt
         };
     }
 
@@ -575,7 +575,7 @@ export abstract class BaseProviderAdapter implements ModelProtocol
             {
                 const abortIdle = (): void => 
                 {
-                    if( closed ){ return }
+                    if( closed ){return;}
 
                     closed = true;
                     clearIdle();
@@ -583,7 +583,7 @@ export abstract class BaseProviderAdapter implements ModelProtocol
 
                     try
                     {
-                        reader.cancel( idleError ).catch( () => { /* ignore */ } );
+                        reader.cancel( idleError ).catch( () => {/* ignore */} );
                     }
                     catch
                     {
@@ -595,7 +595,7 @@ export abstract class BaseProviderAdapter implements ModelProtocol
 
                 const onCallerAbort = (): void => 
                 {
-                    if( closed ){ return }
+                    if( closed ){return;}
 
                     closed = true;
                     clearIdle();
@@ -607,7 +607,7 @@ export abstract class BaseProviderAdapter implements ModelProtocol
 
                     try
                     {
-                        reader.cancel( error ).catch( () => { /* ignore */ } );
+                        reader.cancel( error ).catch( () => {/* ignore */} );
                     }
                     catch
                     {
@@ -633,7 +633,7 @@ export abstract class BaseProviderAdapter implements ModelProtocol
                         {
                             const { done, value } = await reader.read();
 
-                            if( closed ){ return }
+                            if( closed ){return;}
 
                             clearIdle();
 
@@ -652,7 +652,7 @@ export abstract class BaseProviderAdapter implements ModelProtocol
                     }
                     catch( error )
                     {
-                        if( closed ){ return }
+                        if( closed ){return;}
 
                         closed = true;
                         clearIdle();

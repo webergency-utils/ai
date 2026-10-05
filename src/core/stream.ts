@@ -1,11 +1,11 @@
 import type { ModelStreamChunk } from './types.js';
 
 export type SSEEvent =
-{
-    event? : string
-    data   : string
-    id?    : string
-}
+    {
+        event? : string
+        data   : string
+        id?    : string
+    }
 
 export interface SSEDecoder
 {
