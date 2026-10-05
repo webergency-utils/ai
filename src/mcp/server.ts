@@ -4,9 +4,18 @@ import type {
     JSONRPCMessage, 
     JSONRPCRequest, 
     JSONRPCResponse, 
+    MCPContentItem,
+    MCPServerCapabilities,
     MCPTool, 
     MCPTransport 
 } from './types.js';
+import { 
+    JSONRPC_INVALID_PARAMS, 
+    JSONRPC_METHOD_NOT_FOUND, 
+    LATEST_PROTOCOL_VERSION, 
+    MCP_SERVER_NOT_INITIALIZED, 
+    isSupportedProtocolVersion 
+} from './protocol.js';
 import { SimpleExecutionContext, type ExecutionContext } from '../agent/context.js';
 import { SpanImpl } from '../trace/span.js';
 import type { SpendTracker } from '../spend/tracker.js';
@@ -21,6 +30,16 @@ export interface MCPServerOptions
     version?  : string
     /** Spend tracker for tool handlers when no per-call context is supplied (R30). */
     tracker?  : SpendTracker
+}
+
+/**
+ * Per-connection lifecycle state. `MCPServer.connect()` keeps one per transport; the HTTP handler keeps one
+ * per session. `handleMessage` without a connection is session-agnostic and performs no lifecycle gating.
+ */
+export interface MCPServerConnection
+{
+    initialized      : boolean
+    protocolVersion? : string
 }
 
 export class MCPServer
@@ -42,14 +61,27 @@ export class MCPServer
         this.#tools.set( tool.name, { definition : tool, handler } );
     }
 
+    public createConnection(): MCPServerConnection
+    {
+        return { initialized : false };
+    }
+
+    #capabilities(): MCPServerCapabilities
+    {
+        // `tools` is always advertised (back-compat: tools may be registered after the handshake).
+        return { tools : {} };
+    }
+
     public async connect( transport: MCPTransport ): Promise<void>
     {
+        const connection = this.createConnection();
+
         transport.onMessage( async ( message ) => 
         {
             const defaultContext = this.#tracker
                 ? new SimpleExecutionContext( { tracker : this.#tracker } )
                 : undefined;
-            const response = await this.handleMessage( message, defaultContext );
+            const response = await this.handleMessage( message, defaultContext, connection );
 
             if( response )
             {
@@ -60,7 +92,11 @@ export class MCPServer
         await transport.connect();
     }
 
-    public async handleMessage( message: JSONRPCMessage, context?: ExecutionContext ): Promise<JSONRPCResponse | null>
+    public async handleMessage( 
+        message: JSONRPCMessage, 
+        context?: ExecutionContext, 
+        connection?: MCPServerConnection 
+    ): Promise<JSONRPCResponse | null>
     {
         if( !( 'method' in message ) )
         {
@@ -75,20 +111,56 @@ export class MCPServer
             return null;
         }
 
-        switch ( req.method )
+        if( req.method === 'ping' )
         {
-            case 'initialize':
+            return { jsonrpc : '2.0', id : req.id, result : {} };
+        }
+
+        if( req.method === 'initialize' )
+        {
+            const requested = req.params?.protocolVersion;
+
+            if( typeof requested !== 'string' )
+            {
                 return {
                     jsonrpc : '2.0',
                     id      : req.id,
-                    result : 
-                    {
-                        protocolVersion : '2024-11-05',
-                        capabilities    : { tools : {} },
-                        serverInfo      : { name : this.#name, version : this.#version }
-                    }
+                    error   : { code : JSONRPC_INVALID_PARAMS, message : "initialize requires a string 'protocolVersion'" }
                 };
+            }
 
+            // Echo the client's version when supported, otherwise answer with our latest and let the client decide.
+            const protocolVersion = isSupportedProtocolVersion( requested ) ? requested : LATEST_PROTOCOL_VERSION;
+
+            if( connection )
+            {
+                connection.initialized = true;
+                connection.protocolVersion = protocolVersion;
+            }
+
+            return {
+                jsonrpc : '2.0',
+                id      : req.id,
+                result : 
+                {
+                    protocolVersion,
+                    capabilities : this.#capabilities(),
+                    serverInfo   : { name : this.#name, version : this.#version }
+                }
+            };
+        }
+
+        if( connection && !connection.initialized )
+        {
+            return {
+                jsonrpc : '2.0',
+                id      : req.id,
+                error   : { code : MCP_SERVER_NOT_INITIALIZED, message : `Received '${req.method}' before initialize` }
+            };
+        }
+
+        switch ( req.method )
+        {
             case 'tools/list':
             {
                 const tools: MCPTool[] = [];
@@ -123,7 +195,7 @@ export class MCPServer
                         id      : req.id,
                         error : 
                         {
-                            code    : -32601,
+                            code    : JSONRPC_METHOD_NOT_FOUND,
                             message : `Tool '${toolName}' not found`
                         }
                     };
@@ -173,7 +245,7 @@ export class MCPServer
                         serverToolSpan.end();
                     }
 
-                    let formattedContent: Array<{ type: string, text: string }>;
+                    let formattedContent: MCPContentItem[];
 
                     if( 
                         rawResult && 
@@ -182,7 +254,7 @@ export class MCPServer
                         Array.isArray( ( rawResult as { content: unknown } ).content ) 
                     )
                     {
-                        formattedContent = ( rawResult as { content: Array<{ type: string, text: string }> } ).content;
+                        formattedContent = ( rawResult as { content: MCPContentItem[] } ).content;
                     }
                     else
                     {
@@ -198,6 +270,13 @@ export class MCPServer
                             content : formattedContent,
                             isError : false
                         };
+
+                    const structured = ( rawResult as { structuredContent?: unknown } | null )?.structuredContent;
+
+                    if( structured !== undefined && Array.isArray( ( rawResult as { content?: unknown } ).content ) )
+                    {
+                        responseResult.structuredContent = structured;
+                    }
 
                     if( serverToolSpan )
                     {
@@ -257,7 +336,7 @@ export class MCPServer
                     id      : req.id,
                     error : 
                     {
-                        code    : -32601,
+                        code    : JSONRPC_METHOD_NOT_FOUND,
                         message : `Method '${req.method}' not implemented`
                     }
                 };
