@@ -1,8 +1,9 @@
-import type { LanguageModel } from '../core/protocol.js';
+import { getCapabilities, type LanguageModel } from '../core/protocol.js';
+import { toJsonSchema, validateSchema } from '../core/schema.js';
 import type { ChatMessage, ModelRequest, ModelResponse, ToolCall, ToolDefinition } from '../core/types.js';
 import type { SpendTracker } from '../spend/tracker.js';
 import type { CategorySpendBreakdown } from '../spend/types.js';
-import { AIError, BudgetRefusedError, CancelledError, GuardrailTripwireError, type GuardrailStage } from '../core/error.js';
+import { AIError, BudgetRefusedError, CancelledError, CapabilityError, GuardrailTripwireError, InvalidInputError, type GuardrailStage } from '../core/error.js';
 import { finalizeStream } from '../core/tool-stream.js';
 import type { Tool } from './tool.js';
 import type { CheckpointManager, AgentRunStatus, PendingToolCall } from './checkpoint.js';
@@ -25,6 +26,13 @@ export interface AgentConfig
     toolConcurrency?   : number
     /** Input / tool / output checks; a trip throws `GuardrailTripwireError` and saves status `blocked`. */
     guardrails?        : AgentGuardrails
+    /** JSON Schema the final answer must satisfy; requires a model with `capabilities.structuredOutput`. */
+    outputSchema?      : ModelRequest['outputSchema']
+    /**
+     * `finalize` (default) runs the tool loop without a schema, then one extra tool-less call
+     * with the schema. `inline` sends the schema on every step (needs provider support for schema + tools).
+     */
+    outputStrategy?    : 'inline' | 'finalize'
     checkpointManager? : CheckpointManager
     spendTracker?      : SpendTracker
     jitRetriever?      : JITToolRetriever
@@ -45,6 +53,8 @@ export interface AgentRunOptions
 export interface AgentResult
 {
     text           : string
+    /** Schema-validated final value when `outputSchema` is set; never fabricated on `step_limit`. */
+    output?        : unknown
     messages       : ChatMessage[]
     steps          : number
     spendUSD       : number
@@ -76,6 +86,7 @@ interface StepResponse
     reasoningContent? : string
     usage?            : ModelResponse['usage']
     finishReason?     : ModelResponse['finishReason']
+    structured?       : unknown
     /** Model-category spend recorded by the metered model during this call. */
     spendDeltaUSD     : number
 }
@@ -93,6 +104,8 @@ function lastToolTurn( messages: ChatMessage[] ): number
 
     return -1;
 }
+
+const FINALIZE_PROMPT = 'Provide your final answer now as JSON that satisfies the required output schema. Respond with the JSON only.';
 
 function newId( prefix: string ): string
 {
@@ -132,6 +145,8 @@ export class Agent
     readonly #maxIterations     : number;
     readonly #toolConcurrency   : number;
     readonly #guardrails        : AgentGuardrails;
+    readonly #outputSchema?     : ModelRequest['outputSchema'];
+    readonly #outputStrategy    : 'inline' | 'finalize';
     readonly #checkpointManager?: CheckpointManager;
     readonly #spendTracker?     : SpendTracker;
     readonly #jitRetriever?     : JITToolRetriever;
@@ -147,6 +162,30 @@ export class Agent
         this.#guardrails = config.guardrails ?? {};
 
         assertGuardrailConfig( this.#guardrails );
+
+        this.#outputSchema = config.outputSchema;
+        this.#outputStrategy = config.outputStrategy ?? 'finalize';
+
+        if( this.#outputStrategy !== 'inline' && this.#outputStrategy !== 'finalize' )
+        {
+            throw new AIError( `outputStrategy must be 'inline' or 'finalize', got '${String( config.outputStrategy )}'`, 'AGENT_CONFIG', { outputStrategy : config.outputStrategy } );
+        }
+
+        if( config.outputStrategy !== undefined && !this.#outputSchema )
+        {
+            throw new AIError( 'outputStrategy requires an outputSchema', 'AGENT_CONFIG', { outputStrategy : config.outputStrategy } );
+        }
+
+        if( this.#outputSchema )
+        {
+            if( !getCapabilities( this.#model ).structuredOutput )
+            {
+                throw new CapabilityError( this.#model.provider, 'structuredOutput', `Agent outputSchema needs a model with structured output support (model '${this.#model.model}')` );
+            }
+
+            // Compiling is eager: unsupported schema constructs throw here instead of on the first run.
+            validateSchema( toJsonSchema( this.#outputSchema ), {}, 'relaxed' );
+        }
 
         if( !Number.isInteger( this.#toolConcurrency ) || this.#toolConcurrency < 1 )
         {
@@ -461,6 +500,7 @@ export class Agent
         let completedToolIds: string[] = [];
         let status: AgentRunStatus = 'running';
         let finalText = '';
+        let output: unknown;
         /** Length of `messages` a `blocked` checkpoint rolls back to (never leaves dangling tool calls). */
         let safeLength = 0;
 
@@ -621,7 +661,8 @@ export class Agent
                                     messages,
                                     toolDefs,
                                     threadId,
-                                    agentId
+                                    agentId,
+                                    outputSchema : this.#outputStrategy === 'inline' ? this.#outputSchema : undefined
                                 } );
 
                                 totalSpendUSD += response.spendDeltaUSD;
@@ -669,11 +710,69 @@ export class Agent
                                     return true;
                                 }
 
+                                let structured: unknown;
+
+                                if( this.#outputSchema )
+                                {
+                                    if( this.#outputStrategy === 'inline' )
+                                    {
+                                        structured = response.structured;
+                                    }
+                                    else
+                                    {
+                                        // `finalize`: one extra tool-less call over the history; it is a step of its own and cannot be starved by maxIterations.
+                                        const finalizeIndex = runStepCount;
+
+                                        emit( { type : 'step:start', step : finalizeIndex } );
+
+                                        const finalized = await stepCtx.withSpan( 
+                                            'agent:finalize', 
+                                            ( finalizeSpan, finalizeCtx ) => 
+                                            {
+                                                finalizeSpan.setAttribute( 'step.index', finalizeIndex );
+
+                                                return this.#callModel( {
+                                                    stepCtx      : finalizeCtx,
+                                                    stepIndex    : finalizeIndex,
+                                                    streaming,
+                                                    signal,
+                                                    emit,
+                                                    messages     : [ ...messages, { role : 'assistant', content : response.content }, { role : 'user', content : FINALIZE_PROMPT } ],
+                                                    toolDefs     : [],
+                                                    threadId,
+                                                    agentId,
+                                                    outputSchema : this.#outputSchema
+                                                } );
+                                            }, 
+                                            { kind : 'agent' } 
+                                        );
+
+                                        totalSpendUSD += finalized.spendDeltaUSD;
+                                        runStepCount++;
+
+                                        if( finalized.toolCalls && finalized.toolCalls.length > 0 )
+                                        {
+                                            throw new InvalidInputError( 'The model issued tool calls on the tool-free structured output turn', { toolCalls : finalized.toolCalls } );
+                                        }
+
+                                        structured = finalized.structured;
+                                        emit( { type : 'step:finish', step : finalizeIndex, usage : finalized.usage, finishReason : finalized.finishReason, toolCalls : 0 } );
+                                    }
+
+                                    if( structured === undefined )
+                                    {
+                                        throw new InvalidInputError( 'outputSchema was set but the model returned no structured output', { text : response.content } );
+                                    }
+
+                                    this.#assertValidOutput( structured );
+                                }
+
                                 this.#enforce( 
                                     'output', 
-                                    await runGuardrails( 'output', this.#guardrails.output, { text : response.content }, { ...scope, context : stepCtx, signal } ) 
+                                    await runGuardrails( 'output', this.#guardrails.output, { text : response.content, ...( this.#outputSchema ? { output : structured } : {} ) }, { ...scope, context : stepCtx, signal } ) 
                                 );
 
+                                output = structured;
                                 finalText = response.content;
                                 messages.push( { role : 'assistant', content : finalText } );
                                 status = 'completed';
@@ -701,6 +800,7 @@ export class Agent
 
                     return {
                         text          : finalText,
+                        ...( output !== undefined ? { output } : {} ),
                         messages,
                         steps         : runStepCount,
                         spendUSD      : this.#spendTracker ? this.#spendTracker.totalSpendUSD : totalSpendUSD,
@@ -760,9 +860,10 @@ export class Agent
         toolDefs: ToolDefinition[]
         threadId: string
         agentId: string
+        outputSchema?: ModelRequest['outputSchema']
     } ): Promise<StepResponse>
     {
-        const { stepCtx, stepIndex, streaming, signal, emit, messages, toolDefs, threadId, agentId } = args;
+        const { stepCtx, stepIndex, streaming, signal, emit, messages, toolDefs, threadId, agentId, outputSchema } = args;
 
         return stepCtx.withSpan( 
             streaming ? 'model:stream' : 'model:generate', 
@@ -785,7 +886,8 @@ export class Agent
                     messages,
                     systemPrompt : this.#instructions,
                     tools        : toolDefs.length > 0 ? toolDefs : undefined,
-                    signal
+                    signal,
+                    ...( outputSchema ? { outputSchema } : {} )
                 };
 
                 let response: StepResponse;
@@ -797,8 +899,9 @@ export class Agent
                     let toolCalls: ToolCall[] | undefined;
                     let usage: ModelResponse['usage'] | undefined;
                     let finishReason: ModelResponse['finishReason'] | undefined;
+                    let structured: unknown;
 
-                    const chunks = finalizeStream( model.stream( request ), { provider : model.provider, tools : request.tools } );
+                    const chunks = finalizeStream( model.stream( request ), { provider : model.provider, tools : request.tools, outputSchema } );
 
                     for await ( const chunk of chunks )
                     {
@@ -819,6 +922,7 @@ export class Agent
                         toolCalls = chunk.toolCalls && chunk.toolCalls.length > 0 ? chunk.toolCalls : toolCalls;
                         usage = chunk.usage ?? usage;
                         finishReason = chunk.finishReason ?? finishReason;
+                        structured = chunk.structured ?? structured;
                     }
 
                     response = {
@@ -826,6 +930,7 @@ export class Agent
                         toolCalls,
                         usage,
                         finishReason,
+                        structured,
                         spendDeltaUSD : 0,
                         ...( reasoning ? { reasoningContent : reasoning } : {} )
                     };
@@ -839,6 +944,7 @@ export class Agent
                         toolCalls     : resp.toolCalls,
                         usage         : resp.usage,
                         finishReason  : resp.finishReason,
+                        structured    : resp.structured,
                         spendDeltaUSD : 0,
                         ...( resp.reasoningContent !== undefined ? { reasoningContent : resp.reasoningContent } : {} )
                     };
@@ -862,6 +968,19 @@ export class Agent
             }, 
             { kind : 'model' } 
         );
+    }
+
+    /** Re-validates the model's `structured` value so a custom model cannot bypass the schema. */
+    #assertValidOutput( value: unknown ): void
+    {
+        const result = validateSchema( toJsonSchema( this.#outputSchema ), value, 'relaxed' );
+
+        if( !result.success )
+        {
+            const detail = ( result.errors ?? [] ).map( ( err ) => {return `${err.path || '(root)'}: ${err.error}`;} ).join( '; ' );
+
+            throw new InvalidInputError( `Agent output failed schema validation: ${detail}`, { errors : result.errors, value } );
+        }
     }
 
     #assertNotAborted( signal?: AbortSignal ): void
