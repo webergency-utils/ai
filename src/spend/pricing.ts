@@ -57,7 +57,8 @@ export const DEFAULT_PROVIDER_BASE_URLS: Record<string, string> =
         groq      : 'https://api.groq.com/openai/v1',
         deepseek  : 'https://api.deepseek.com',
         mistral   : 'https://api.mistral.ai/v1',
-        ollama    : 'http://127.0.0.1:11434'
+        ollama    : 'http://127.0.0.1:11434',
+        typesafe  : 'https://api.typesafe.ai'
     };
 
 /** Recognized snapshot / date suffixes for prefix price matching (R25, R51). */
@@ -229,6 +230,18 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> =
             outputPerMillion : 0.79
         },
 
+        // Jev (decision model): $0.042 per million input tokens; output tokens are free.
+        'typesafe:jev-*' : {
+            provider         : 'typesafe',
+            inputPerMillion  : 0.042,
+            outputPerMillion : 0
+        },
+        'typesafe:jev-latest' : {
+            provider         : 'typesafe',
+            inputPerMillion  : 0.042,
+            outputPerMillion : 0
+        },
+
         'ollama:*' : {
             provider         : 'ollama',
             free             : true,
@@ -249,7 +262,7 @@ function expandDefaultAliases( prices: Record<string, ModelPricing> ): Record<st
         {
             const bare = key.slice( colon + 1 );
 
-            if( bare !== '*' && out[ bare ] === undefined )
+            if( !bare.endsWith( '*' ) && out[ bare ] === undefined )
             {
                 out[ bare ] = pricing;
             }
@@ -447,6 +460,18 @@ export class PricingRegistry
 
             if( modelKey === '*' )
             {
+                continue;
+            }
+
+            // Trailing `*` is an explicit prefix wildcard (e.g. pinned decision-model versions).
+            if( modelKey.endsWith( '*' ) )
+            {
+                if( model.startsWith( modelKey.slice( 0, -1 ) ) && ( !bestKey || modelKey.length > bestKey.slice( prefix.length ).length ) )
+                {
+                    bestKey = key;
+                    bestPricing = pricing;
+                }
+
                 continue;
             }
 

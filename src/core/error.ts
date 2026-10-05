@@ -85,6 +85,28 @@ export class CapabilityError extends AIError
     }
 }
 
+export class InputLimitError extends AIError
+{
+    public readonly provider        : string;
+    public readonly scope           : string;
+    public readonly estimatedTokens?: number;
+    public readonly limitTokens?    : number;
+
+    constructor( provider: string, scope: string, estimatedTokens?: number, limitTokens?: number, details?: unknown )
+    {
+        super( 
+            `[${provider}] Request exceeds the model's input limit (${scope})${estimatedTokens !== undefined && limitTokens !== undefined ? `: about ${estimatedTokens} tokens, limit ${limitTokens}` : ''}. Input is never truncated; shorten the input or questions`, 
+            'INPUT_LIMIT_EXCEEDED', 
+            { provider, scope, estimatedTokens, limitTokens, ...( details && typeof details === 'object' ? details as object : {} ) } 
+        );
+        this.name = 'InputLimitError';
+        this.provider = provider;
+        this.scope = scope;
+        this.estimatedTokens = estimatedTokens;
+        this.limitTokens = limitTokens;
+    }
+}
+
 export class BudgetExceededError extends AIError
 {
     public readonly currentSpendUSD : number;

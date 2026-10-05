@@ -10,6 +10,8 @@ export * from './embeddings-base.js';
 export * from './openai-embeddings.js';
 export * from './gemini-embeddings.js';
 export * from './ollama-embeddings.js';
+export * from './jev.js';
+export * from './language-model-decision.js';
 export * from './registry.js';
 export * from './sdk-bridge.js';
 export * from './metered.js';

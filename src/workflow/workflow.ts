@@ -1,8 +1,16 @@
 import { AIError } from '../core/error.js';
 import type { 
+    DecisionAnswers, 
+    DecisionInput, 
+    DecisionModel, 
+    DecisionQuestions 
+} from '../core/decision.js';
+import { assertQuestion } from '../core/decision.js';
+import type { 
     WorkflowNode, 
     StepHandler, 
-    StepContext 
+    StepContext,
+    DecisionNode
 } from './nodes.js';
 
 export interface StepOptions
@@ -28,6 +36,23 @@ export interface RouteOptions
 {
     branches      : Record<string, string>
     dependencies? : string[]
+}
+
+export interface DecisionStepOptions<Q extends DecisionQuestions, B extends Record<string, string>, TIn = unknown>
+{
+    /** Jev, a language-model decision adapter, or any other decision model. */
+    model         : DecisionModel
+    questions     : Q
+    /** Input data for every question: a fixed value, or built from the upstream step output. */
+    input         : DecisionInput | ( ( input: TIn, context: StepContext ) => DecisionInput | Promise<DecisionInput> )
+    /** Declared branches: branch name to the id of the node that runs when it is chosen. */
+    branches      : B
+    /** Receives the typed answers and returns the name of a declared branch. */
+    route         : ( answers: DecisionAnswers<Q>, context: StepContext ) => ( keyof B & string ) | Promise<keyof B & string>
+    dependencies? : string[]
+    /** Extra attempts after a failed decision call (default 0), spaced like step retries. */
+    retries?      : number
+    timeoutMs?    : number
 }
 
 export class Workflow
@@ -124,6 +149,57 @@ export class Workflow
             branches      : { ...options.branches },
             dependencies  : options.dependencies ?? [],
             branchTargets : targets
+        } );
+
+        return this;
+    }
+
+    /**
+     * Decision step: one call to a decision model, then a typed routing function picks the
+     * next branch. Only that branch runs; the others are skipped. The answers become the step
+     * output and are saved in the checkpoint, so a resumed run never asks again.
+     */
+    public decision<Q extends DecisionQuestions, const B extends Record<string, string>, TIn = unknown>( 
+        id: string, 
+        options: DecisionStepOptions<Q, B, TIn> 
+    ): this
+    {
+        if( this.#nodes.has( id ) )
+        {
+            throw new AIError( `Node '${id}' is already defined in workflow '${this.name}'`, 'WORKFLOW_DUPLICATE_NODE' );
+        }
+
+        const names = Object.keys( options.questions );
+
+        if( names.length === 0 )
+        {
+            throw new AIError( `Decision '${id}' needs at least one question`, 'WORKFLOW_INVALID_DECISION' );
+        }
+
+        for( const name of names )
+        {
+            assertQuestion( name, options.questions[ name ] );
+        }
+
+        const branchNames = Object.keys( options.branches );
+
+        if( branchNames.length === 0 )
+        {
+            throw new AIError( `Decision '${id}' needs at least one branch`, 'WORKFLOW_INVALID_DECISION' );
+        }
+
+        this.#nodes.set( id, {
+            id,
+            type          : 'decision',
+            model         : options.model,
+            questions     : options.questions,
+            input         : options.input as DecisionNode['input'],
+            route         : options.route as unknown as DecisionNode['route'],
+            branches      : { ...options.branches },
+            retries       : options.retries ?? 0,
+            ...( options.timeoutMs !== undefined ? { timeoutMs : options.timeoutMs } : {} ),
+            dependencies  : options.dependencies ?? [],
+            branchTargets : Object.values( options.branches )
         } );
 
         return this;
