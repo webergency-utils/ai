@@ -9,3 +9,4 @@ export * from './tool-stream.js';
 export * from './multimodal.js';
 export * from './structured-output.js';
 export * from './embeddings.js';
+export * from './decision.js';
