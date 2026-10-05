@@ -15,6 +15,8 @@ import { toAnthropicBlocks } from '../core/multimodal.js';
 import { parseToolArguments } from '../core/tool-stream.js';
 import { parseSSEStream, createStreamChunk } from '../core/stream.js';
 
+const STRUCTURED_TOOL_NAME = 'structured_output';
+
 interface RawAnthropicUsage
 {
     input_tokens?: number
@@ -96,6 +98,7 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
         const data = await response.json() as RawAnthropicResponse;
         let content = '';
         const toolCalls: ToolCall[] = [];
+        let structuredTool = false;
 
         if( data.content && Array.isArray( data.content ) )
         {
@@ -104,6 +107,11 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                 if( block.type === 'text' && block.text )
                 {
                     content += block.text;
+                }
+                else if( block.type === 'tool_use' && request.outputSchema && block.name === STRUCTURED_TOOL_NAME )
+                {
+                    structuredTool = true;
+                    content += JSON.stringify( block.input ?? null );
                 }
                 else if( block.type === 'tool_use' )
                 {
@@ -119,17 +127,18 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
             }
         }
 
-        const finishReason = this.mapFinishReason( data.stop_reason );
+        const mappedReason = this.mapFinishReason( data.stop_reason );
+        const finishReason = structuredTool && mappedReason === 'tool_calls' ? 'stop' : mappedReason;
         const usage = this.parseUsage( data.usage );
 
-        return {
+        return this.withStructured( request, {
             content,
             role      : 'assistant',
             toolCalls : toolCalls.length > 0 ? toolCalls : undefined,
             usage,
             finishReason,
             raw       : data
-        };
+        } );
     }
 
     public stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
@@ -168,6 +177,7 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
 
         let accumulatedUsage: RawAnthropicUsage = {};
         const activeToolCalls = new Map<number, { id: string, name: string }>();
+        const structuredBlocks = new Set<number>();
         let sawMessageStop = false;
 
         for await ( const event of parseSSEStream( response.body ) )
@@ -234,7 +244,11 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                 const block = eventData.content_block as RawAnthropicContentBlock | undefined;
                 const index = ( eventData.index as number ) ?? 0;
 
-                if( block?.type === 'tool_use' )
+                if( block?.type === 'tool_use' && request.outputSchema && block.name === STRUCTURED_TOOL_NAME )
+                {
+                    structuredBlocks.add( index );
+                }
+                else if( block?.type === 'tool_use' )
                 {
                     activeToolCalls.set( index, { id : block.id ?? '', name : block.name ?? '' } );
                     yield createStreamChunk( '', 
@@ -260,6 +274,10 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                 if( delta?.type === 'text_delta' && typeof delta.text === 'string' )
                 {
                     yield createStreamChunk( delta.text, { raw : eventData } );
+                }
+                else if( delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string' && structuredBlocks.has( index ) )
+                {
+                    yield createStreamChunk( delta.partial_json, { raw : eventData } );
                 }
                 else if( delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string' )
                 {
@@ -290,9 +308,11 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
                     accumulatedUsage = { ...accumulatedUsage, ...( eventData.usage as RawAnthropicUsage ) };
                 }
 
+                const mapped = this.mapFinishReason( stopReason );
+
                 yield createStreamChunk( '', 
                     {
-                        finishReason : this.mapFinishReason( stopReason ),
+                        finishReason : structuredBlocks.size > 0 && mapped === 'tool_calls' ? 'stop' : mapped,
                         usage        : this.parseUsage( accumulatedUsage ),
                         raw          : eventData
                     } );
@@ -346,7 +366,11 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
             payload.top_p = this.config.topP;
         }
 
-        if( request.tools && request.tools.length > 0 )
+        if( request.outputSchema )
+        {
+            this.applyStructuredOutput( request, payload );
+        }
+        else if( request.tools && request.tools.length > 0 )
         {
             payload.tools = request.tools.map( ( tool ) => 
             {
@@ -385,6 +409,27 @@ export class AnthropicProviderAdapter extends BaseProviderAdapter
         }
 
         return payload;
+    }
+
+    /**
+     * Anthropic structured output: a forced synthetic tool whose input schema is the output
+     * schema (works on every model). The tool input is surfaced as the response text.
+     */
+    protected applyStructuredOutput( request: ModelRequest, payload: Record<string, unknown> ): void
+    {
+        if( request.tools && request.tools.length > 0 )
+        {
+            throw new InvalidInputError( 
+                'Anthropic outputSchema cannot be combined with tools in one request (structured output uses a forced tool call)' 
+            );
+        }
+
+        payload.tools = [ {
+            name         : STRUCTURED_TOOL_NAME,
+            description  : 'Return the final answer as structured data matching this schema.',
+            input_schema : toJsonSchema( request.outputSchema )
+        } ];
+        payload.tool_choice = { type : 'tool', name : STRUCTURED_TOOL_NAME };
     }
 
     protected formatMessagesAndSystem( request: ModelRequest ): { 

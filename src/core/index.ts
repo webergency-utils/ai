@@ -7,3 +7,4 @@ export * from './ndjson.js';
 export * from './schema.js';
 export * from './tool-stream.js';
 export * from './multimodal.js';
+export * from './structured-output.js';

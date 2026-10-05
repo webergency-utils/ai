@@ -10,6 +10,7 @@ import type {
     UsageMetrics
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
+import { isStrictCompatible, resolveOutputMode, schemaInstruction } from '../core/structured-output.js';
 import { ProviderError } from '../core/error.js';
 import { assertAttachmentRole, toOpenAIParts } from '../core/multimodal.js';
 import { parseToolArguments } from '../core/tool-stream.js';
@@ -125,14 +126,14 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
         const usage = this.parseUsage( data.usage );
         const finishReason = this.mapFinishReason( choice?.finish_reason );
 
-        return {
+        return this.withStructured( request, {
             content   : message?.content ?? '',
             role      : 'assistant',
             toolCalls : toolCalls.length > 0 ? toolCalls : undefined,
             usage,
             finishReason,
             raw       : data
-        };
+        } );
     }
 
     public stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
@@ -270,6 +271,8 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
             payload.top_p = this.config.topP;
         }
 
+        this.applyStructuredOutput( request, payload, messages );
+
         if( request.promptCacheKey )
         {
             payload.prompt_cache_key = request.promptCacheKey;
@@ -318,6 +321,55 @@ export class OpenAIProviderAdapter extends BaseProviderAdapter
         }
 
         return payload;
+    }
+
+    /**
+     * Wire format for `outputSchema`. OpenAI-compatible providers without `json_schema`
+     * (e.g. DeepSeek) override this to 'json_object'.
+     */
+    protected get structuredWireFormat(): 'json_schema' | 'json_object'
+    {
+        return 'json_schema';
+    }
+
+    protected applyStructuredOutput( 
+        request: ModelRequest, 
+        payload: Record<string, unknown>, 
+        messages: Array<Record<string, unknown>> 
+    ): void
+    {
+        const mode = resolveOutputMode( request );
+
+        if( !mode )
+        {
+            return;
+        }
+
+        const useSchema = mode === 'json_schema' && this.structuredWireFormat === 'json_schema';
+
+        if( useSchema )
+        {
+            const schema = toJsonSchema( request.outputSchema );
+
+            payload.response_format = {
+                type        : 'json_schema',
+                json_schema : { name : 'response', strict : isStrictCompatible( schema ), schema }
+            };
+
+            return;
+        }
+
+        if( mode === 'json_schema' )
+        {
+            this.emitWarning( {
+                code    : 'STRUCTURED_OUTPUT_DOWNGRADE',
+                message : `${this.provider} has no json_schema response format; using json_object with the schema in a system instruction`,
+                details : { provider : this.provider, model : this.model }
+            } );
+        }
+
+        payload.response_format = { type : 'json_object' };
+        messages.unshift( { role : 'system', content : schemaInstruction( request.outputSchema ) } );
     }
 
     protected formatMessages( request: ModelRequest ): Array<Record<string, unknown>>

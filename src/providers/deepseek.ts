@@ -17,6 +17,11 @@ export class DeepSeekProviderAdapter extends OpenAIProviderAdapter
         return 'DEEPSEEK_API_KEY';
     }
 
+    protected override get structuredWireFormat(): 'json_schema' | 'json_object'
+    {
+        return 'json_object';
+    }
+
     protected override get defaultCapabilities(): ModelCapabilities
     {
         return {

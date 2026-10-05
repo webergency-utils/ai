@@ -9,6 +9,7 @@ import type {
     ModelStreamChunk 
 } from '../core/types.js';
 import { assertAttachmentRole } from '../core/multimodal.js';
+import { attachStructured } from '../core/structured-output.js';
 import { finalizeStream } from '../core/tool-stream.js';
 import { WarningEmitter, type WarningEvent, type WarningListener } from '../core/warning.js';
 import { 
@@ -186,6 +187,12 @@ export abstract class BaseProviderAdapter implements LanguageModel
         } as ModelCapabilities;
     }
 
+    /** Parses and validates `structured` output on a completed non-stream response. */
+    protected withStructured( request: ModelRequest, response: ModelResponse ): ModelResponse
+    {
+        return attachStructured( this.provider, request, response );
+    }
+
     /** True when message-level `cacheControl` breakpoints map to the wire format. */
     protected get supportsMessageCacheControl(): boolean
     {
@@ -216,6 +223,11 @@ export abstract class BaseProviderAdapter implements LanguageModel
     protected assertRequestSupported( request: ModelRequest ): void
     {
         const caps = this.capabilities;
+
+        if( request.outputMode && !request.outputSchema )
+        {
+            throw new InvalidInputError( `outputMode '${request.outputMode}' requires an outputSchema` );
+        }
 
         if( request.outputSchema && !caps.structuredOutput )
         {
@@ -283,7 +295,11 @@ export abstract class BaseProviderAdapter implements LanguageModel
         source: AsyncIterable<ModelStreamChunk> 
     ): AsyncIterable<ModelStreamChunk>
     {
-        return finalizeStream( source, { provider : this.provider, tools : request.tools } );
+        return finalizeStream( source, { 
+            provider     : this.provider, 
+            tools        : request.tools, 
+            outputSchema : request.outputSchema 
+        } );
     }
 
     public abstract generate( request: ModelRequest ): Promise<ModelResponse>;

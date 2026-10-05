@@ -1,6 +1,7 @@
-import type { ModelStreamChunk, ToolCall, ToolDefinition, UsageMetrics, ModelResponse } from './types.js';
+import type { ModelRequest, ModelStreamChunk, ToolCall, ToolDefinition, UsageMetrics, ModelResponse } from './types.js';
 import { InvalidInputError, ProviderError } from './error.js';
 import { toJsonSchema, validateSchema } from './schema.js';
+import { assertStructuredCompleted, parseStructuredOutput } from './structured-output.js';
 
 const RAW_FRAGMENT_LIMIT = 200;
 
@@ -19,6 +20,8 @@ export interface ToolCallAssemblerOptions
     provider? : string
     /** When set, assembled arguments are validated against the matching tool schema. */
     tools?    : ToolDefinition[]
+    /** When set, `finalizeStream` parses and validates the assembled text once the stream ends. */
+    outputSchema? : ModelRequest['outputSchema']
 }
 
 interface PartialToolCall
@@ -275,7 +278,8 @@ export async function assembleStream(
 /**
  * Passes chunks through unchanged, then (after the source ends cleanly) parses and
  * validates tool calls once. When tool calls arrived as fragments, a final chunk
- * carrying the complete `toolCalls` is appended (R15). Source errors propagate.
+ * carrying the complete `toolCalls` is appended (R15); with `outputSchema` the same
+ * chunk carries the validated `structured` value (R12). Source errors propagate.
  */
 export async function* finalizeStream( 
     source: AsyncIterable<ModelStreamChunk>, 
@@ -292,9 +296,24 @@ export async function* finalizeStream(
     }
 
     const result = assembler.finish();
+    const terminal: ModelStreamChunk = { deltaContent : '' };
 
     if( assembler.sawToolDeltas && result.toolCalls.length > 0 )
     {
-        yield { deltaContent : '', toolCalls : result.toolCalls };
+        terminal.toolCalls = result.toolCalls;
+    }
+
+    // Structured answers are expected on the final, tool-free turn (R12).
+    if( options.outputSchema && result.toolCalls.length === 0 )
+    {
+        const provider = options.provider ?? 'unknown';
+
+        assertStructuredCompleted( provider, result.finishReason );
+        terminal.structured = parseStructuredOutput( provider, result.text, options.outputSchema );
+    }
+
+    if( terminal.toolCalls || 'structured' in terminal )
+    {
+        yield terminal;
     }
 }

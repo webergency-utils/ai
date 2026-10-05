@@ -9,6 +9,7 @@ import type {
     UsageMetrics
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
+import { resolveOutputMode, toGeminiSchema } from '../core/structured-output.js';
 import { ProviderError } from '../core/error.js';
 import { toGeminiParts } from '../core/multimodal.js';
 import { parseToolArguments } from '../core/tool-stream.js';
@@ -140,14 +141,14 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
 
         const usage = this.parseUsage( data.usageMetadata );
 
-        return {
+        return this.withStructured( request, {
             content,
             role      : 'assistant',
             toolCalls : toolCalls.length > 0 ? toolCalls : undefined,
             usage,
             finishReason,
             raw       : data
-        };
+        } );
     }
 
     public stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
@@ -306,6 +307,18 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
         if( this.config.topP !== undefined )
         {
             generationConfig.topP = this.config.topP;
+        }
+
+        const outputMode = resolveOutputMode( request );
+
+        if( outputMode )
+        {
+            generationConfig.responseMimeType = 'application/json';
+
+            if( outputMode === 'json_schema' )
+            {
+                generationConfig.responseSchema = toGeminiSchema( toJsonSchema( request.outputSchema ) );
+            }
         }
 
         if( Object.keys( generationConfig ).length > 0 )

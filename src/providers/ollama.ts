@@ -10,6 +10,7 @@ import type {
     UsageMetrics
 } from '../core/types.js';
 import { toJsonSchema } from '../core/schema.js';
+import { resolveOutputMode } from '../core/structured-output.js';
 import { ProviderError } from '../core/error.js';
 import { assertAttachmentRole, toOllamaImages } from '../core/multimodal.js';
 import { parseToolArguments } from '../core/tool-stream.js';
@@ -83,14 +84,14 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
         const usage = this.parseUsage( data );
         const finishReason = this.mapFinishReason( data.done_reason, toolCalls.length > 0 );
 
-        return {
+        return this.withStructured( request, {
             content   : message?.content ?? '',
             role      : 'assistant',
             toolCalls : toolCalls.length > 0 ? toolCalls : undefined,
             usage,
             finishReason,
             raw       : data
-        };
+        } );
     }
 
     public stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
@@ -274,6 +275,13 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
         if( Object.keys( options ).length > 0 )
         {
             payload.options = options;
+        }
+
+        const outputMode = resolveOutputMode( request );
+
+        if( outputMode )
+        {
+            payload.format = outputMode === 'json_schema' ? toJsonSchema( request.outputSchema ) : 'json';
         }
 
         if( request.tools && request.tools.length > 0 )
