@@ -227,7 +227,7 @@ describe( 'GeminiProviderAdapter', () =>
     it( 'should stream SSE chunks from Gemini streamGenerateContent', async () => 
     {
         const chunk1 = 'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}\n\n';
-        const chunk2 = 'data: {"candidates":[{"content":{"parts":[{"text":" World"}]}}],"usageMetadata":{"totalTokenCount":12}}\n\n';
+        const chunk2 = 'data: {"candidates":[{"content":{"parts":[{"text":" World"}]},"finishReason":"STOP"}],"usageMetadata":{"totalTokenCount":12}}\n\n';
 
         const encoder = new TextEncoder();
         const stream = new ReadableStream<Uint8Array>( {
@@ -261,5 +261,39 @@ describe( 'GeminiProviderAdapter', () =>
         expect( chunks[0].deltaContent ).toBe( 'Hello' );
         expect( chunks[1].deltaContent ).toBe( ' World' );
         expect( chunks[1].usage?.totalTokens ).toBe( 12 );
+        expect( chunks[1].finishReason ).toBe( 'stop' );
+    } );
+
+    it( 'throws when the stream ends without finishReason (R44)', async () => 
+    {
+        const chunk1 = 'data: {"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}\n\n';
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>( {
+            start( controller )
+            {
+                controller.enqueue( encoder.encode( chunk1 ) );
+                controller.close();
+            }
+        } );
+
+        vi.mocked( fetch ).mockResolvedValue( {
+            ok     : true,
+            status : 200,
+            body   : stream
+        } as unknown as Response );
+
+        const adapter = new GeminiProviderAdapter( {
+            provider : 'gemini',
+            model    : 'gemini-2.5-flash',
+            apiKey   : 'mock-gemini-key'
+        } );
+
+        await expect( ( async () => 
+        {
+            for await ( const _chunk of adapter.stream( { messages : [ { role : 'user', content : 'Hi' } ] } ) )
+            {
+                // consume
+            }
+        } )() ).rejects.toThrow( /without a finishReason terminator/ );
     } );
 } );

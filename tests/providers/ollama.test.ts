@@ -151,4 +151,41 @@ describe( 'OllamaProviderAdapter', () =>
         expect( chunks[1].deltaContent ).toBe( 'fast!' );
         expect( chunks[1].usage?.totalTokens ).toBe( 25 );
     } );
+
+    it( 'throws when the stream ends without done:true (R44)', async () => 
+    {
+        const line1 = JSON.stringify( { 
+            model   : 'llama3', 
+            message : { role : 'assistant', content : 'partial' }, 
+            done    : false 
+        } ) + '\n';
+
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>( {
+            start( controller )
+            {
+                controller.enqueue( encoder.encode( line1 ) );
+                controller.close();
+            }
+        } );
+
+        vi.mocked( fetch ).mockResolvedValue( {
+            ok     : true,
+            status : 200,
+            body   : stream
+        } as unknown as Response );
+
+        const adapter = new OllamaProviderAdapter( {
+            provider : 'ollama',
+            model    : 'llama3'
+        } );
+
+        await expect( ( async () => 
+        {
+            for await ( const _chunk of adapter.stream( { messages : [ { role : 'user', content : 'Run' } ] } ) )
+            {
+                // consume
+            }
+        } )() ).rejects.toThrow( /without done:true terminator/ );
+    } );
 } );

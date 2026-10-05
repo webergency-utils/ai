@@ -101,6 +101,7 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
         const reader = response.body.getReader();
         const textDecoder = new TextDecoder();
         const ndjson = createNDJSONDecoder();
+        let sawDone = false;
 
         const parseLine = ( trimmed: string ): ModelStreamChunk | undefined => 
         {
@@ -118,6 +119,12 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
             const deltaContent = chunkData.message?.content ?? '';
             const toolCalls = this.parseToolCalls( chunkData.message?.tool_calls );
             const isDone = chunkData.done ?? false;
+
+            if( isDone )
+            {
+                sawDone = true;
+            }
+
             const finishReason = isDone 
                 ? this.mapFinishReason( chunkData.done_reason, toolCalls.length > 0 ) 
                 : undefined;
@@ -198,6 +205,15 @@ export class OllamaProviderAdapter extends BaseProviderAdapter
             {
                 // Already released.
             }
+        }
+
+        if( !sawDone )
+        {
+            throw new ProviderError( 
+                this.provider, 
+                'Stream ended without done:true terminator', 
+                response.status 
+            );
         }
     }
 

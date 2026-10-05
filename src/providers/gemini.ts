@@ -157,6 +157,7 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
         }
 
         let toolCallIndex = 0;
+        let sawTerminal = false;
 
         for await ( const event of parseSSEStream( response.body ) )
         {
@@ -180,6 +181,12 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
             const finishReason = candidate?.finishReason 
                 ? this.mapFinishReason( candidate.finishReason ) 
                 : undefined;
+
+            if( finishReason )
+            {
+                sawTerminal = true;
+            }
+
             const usage = chunkData.usageMetadata ? this.parseUsage( chunkData.usageMetadata ) : undefined;
 
             let deltaContent = '';
@@ -230,6 +237,15 @@ export class GeminiProviderAdapter extends BaseProviderAdapter
                     raw : chunkData
                 } );
             }
+        }
+
+        if( !sawTerminal )
+        {
+            throw new ProviderError( 
+                this.provider, 
+                'Stream ended without a finishReason terminator', 
+                response.status 
+            );
         }
     }
 
