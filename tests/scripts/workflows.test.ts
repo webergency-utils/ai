@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const dir = fileURLToPath( new URL( '../../.github/workflows/', import.meta.url ) );
 const pkg = JSON.parse( readFileSync( fileURLToPath( new URL( '../../package.json', import.meta.url ) ), 'utf8' ) );
 const files = readdirSync( dir ).filter( ( f ) => f.endsWith( '.yml' ) );
-const read = ( f: string ) => readFileSync( dir + f, 'utf8' );
+const read = ( f: string ) => readFileSync( dir + f, 'utf8' ).replace( /\r\n/g, '\n' );
 
 describe( 'workflow hardening (R8, R10, R20-R22)', () =>
 {

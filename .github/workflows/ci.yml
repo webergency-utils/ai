@@ -121,12 +121,7 @@ jobs:
         if: always()
         run: |
           if [ -f coverage/coverage-summary.json ]; then
-            node -e '
-              const s = require("./coverage/coverage-summary.json").total;
-              const row = (k) => `| ${k} | ${s[k].pct}% | ${s[k].covered}/${s[k].total} |`;
-              console.log("### Coverage\n\n| Metric | % | Covered |\n| --- | --- | --- |");
-              for (const k of ["statements", "branches", "functions", "lines"]) console.log(row(k));
-            ' >> "$GITHUB_STEP_SUMMARY"
+            node scripts/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload lcov

@@ -9,7 +9,7 @@ import { END, START, renderCapabilityTable, replaceBlock } from '../../scripts/l
 import { createModel, defaultRegistry } from '../../src/providers/registry.js';
 
 const root = fileURLToPath( new URL( '../../', import.meta.url ) );
-const readme = readFileSync( path.join( root, 'README.md' ), 'utf8' );
+const readme = readFileSync( path.join( root, 'README.md' ), 'utf8' ).replace( /\r\n/g, '\n' );
 const pkg = JSON.parse( readFileSync( path.join( root, 'package.json' ), 'utf8' ) );
 
 describe( 'extractSnippets (R18)', () =>
