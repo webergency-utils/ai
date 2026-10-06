@@ -108,7 +108,7 @@
         "fuzz:legacy": "npm run build && node scripts/run-fuzz.mjs fuzz_ai.cjs -- -runs=1000 -max_total_time=60"
     },
     "dependencies": {
-        "@webergency-utils/typechecker": "^0.8.1"
+        "@webergency-utils/typechecker": "^0.8.2"
     },
     "devDependencies": {
         "@arethetypeswrong/cli": "^0.18.5",
