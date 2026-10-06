@@ -6,3 +6,4 @@ export * from './collector.js';
 export * from './exporter.js';
 
 
+export * from './otlp-http.js';
