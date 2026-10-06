@@ -95,6 +95,7 @@
         "test": "vitest run",
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",
+        "test:bun": "bunx --bun vitest run tests/core tests/providers tests/storage/memory-stores.test.ts tests/mcp/client-server.test.ts tests/mcp/tools.test.ts",
         "test:live": "vitest run --config vitest.live.config.ts",
         "record:fixtures": "node scripts/record-fixtures.mjs",
         "check:pack": "node scripts/check-pack.mjs",
