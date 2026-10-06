@@ -2,27 +2,83 @@ name: CI
 
 on:
   push:
-    branches: [ "main", "feat-*" ]
+    branches: [ "main", "feat-*", "fix-*" ]
   pull_request:
     branches: [ "main" ]
 
-permissions: read-all
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
-    name: Test
+  quality:
+    name: Quality gates (Node 22)
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        node-version: [ 20, 22 ]
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (src and tests)
+        run: npm run lint
+
+      - name: Type-check (src and tests)
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Tarball contents allowlist
+        run: npm run check:pack
+
+      - name: publint and Are The Types Wrong
+        run: npm run lint:package
+
+      - name: Packed-artifact smoke test
+        run: npm run smoke:pack
+
+      - name: README snippets compile and generated tables are current
+        run: |
+          npm run check:readme
+          npm run gen:capabilities -- --check
+
+  test:
+    name: Test (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest ]
+        node-version: [ 20, 22, 24 ]
+        include:
+          - os: windows-latest
+            node-version: 22
+          - os: macos-latest
+            node-version: 22
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
@@ -30,11 +86,98 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint
-        run: npm run lint
-
       - name: Build
         run: npm run build
 
       - name: Run tests
-        run: npm test
+        run: npx vitest run --reporter=default --reporter=json --outputFile.json=vitest-report.json
+
+      - name: Fail on unexpected skipped tests
+        run: node scripts/check-skips.mjs vitest-report.json
+
+  coverage:
+    name: Coverage (Node 22)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests with coverage thresholds
+        run: npm run test:coverage
+
+      - name: Publish coverage summary
+        if: always()
+        run: |
+          if [ -f coverage/coverage-summary.json ]; then
+            node -e '
+              const s = require("./coverage/coverage-summary.json").total;
+              const row = (k) => `| ${k} | ${s[k].pct}% | ${s[k].covered}/${s[k].total} |`;
+              console.log("### Coverage\n\n| Metric | % | Covered |\n| --- | --- | --- |");
+              for (const k of ["statements", "branches", "functions", "lines"]) console.log(row(k));
+            ' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload lcov
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
+
+  bun:
+    name: Bun smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js 22 (install and build)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Core, providers (replay), memory storage and in-memory MCP under Bun
+        run: npm run test:bun
+
+      - name: Packed tarball imports under Bun
+        run: node scripts/smoke-pack.mjs --runtime=bun --skip-types
+
+  workflows:
+    name: actionlint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Lint workflows
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color # 1.7.12

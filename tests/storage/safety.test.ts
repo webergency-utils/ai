@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import * as fsPromises from 'node:fs/promises';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Readable } from 'node:stream';
 import { LocalDiskFileStore } from '../../src/storage/index.js';

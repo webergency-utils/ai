@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- optional drivers are loaded dynamically and untyped */
 import * as fsPromises from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';

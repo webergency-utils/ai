@@ -147,7 +147,7 @@ describe( 'embeddings', () =>
         {
             vi.mocked( fetch ).mockResolvedValueOnce( jsonResponse( { model : 'nomic', embeddings : [ [ 0.5, 0.6 ] ], prompt_eval_count : 7 } ) );
 
-            const adapter = createEmbeddingModel( { provider: 'ollama', model : 'nomic' } );
+            const adapter = createEmbeddingModel( { provider : 'ollama', model : 'nomic' } );
             const res = await adapter.embed( 'a' );
 
             expect( adapter ).toBeInstanceOf( OllamaEmbeddingAdapter );

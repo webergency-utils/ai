@@ -26,7 +26,14 @@ export interface ToolConfig<TArgs = Record<string, unknown>, TResult = unknown>
     parallelSafe? : boolean
 }
 
-export class Tool<TArgs = Record<string, unknown>, TResult = unknown>
+/**
+ * `TArgs` defaults to `any` (not `Record<string, unknown>`) so that the bare `Tool` type used by
+ * `Agent`, `JITRetriever` and `createMCPTools` accepts tools created with a concrete argument type
+ * (`Tool<{ city: string }>`); the executor parameter is contravariant and would otherwise reject them.
+ * Arguments are validated against `parameters` at runtime before the executor is called.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export class Tool<TArgs = any, TResult = unknown>
 {
     public readonly name        : string;
     public readonly description : string;

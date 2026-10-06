@@ -14,17 +14,17 @@ describe( 'Core Protocol & Streaming', () =>
         const text = 'event: delta\ndata: {"text": "hello"}\n\nevent: done\ndata: [DONE]\n\n';
         const encoder = new TextEncoder();
         const stream = new ReadableStream<Uint8Array>(
-        {
-            start( controller )
             {
-                controller.enqueue( encoder.encode( text ) );
-                controller.close();
-            }
-        });
+                start( controller )
+                {
+                    controller.enqueue( encoder.encode( text ) );
+                    controller.close();
+                }
+            } );
 
         const events = [];
 
-        for await( const ev of parseSSEStream( stream ))
+        for await ( const ev of parseSSEStream( stream ) )
         {
             events.push( ev );
         }
@@ -32,7 +32,7 @@ describe( 'Core Protocol & Streaming', () =>
         expect( events ).toHaveLength( 2 );
         expect( events[0] ).toEqual( { event : 'delta', data : '{"text": "hello"}' } );
         expect( events[1] ).toEqual( { event : 'done', data : '[DONE]' } );
-    });
+    } );
 
     it( 'should handle chunked streaming and comment lines', async () => 
     {
@@ -41,18 +41,18 @@ describe( 'Core Protocol & Streaming', () =>
         const encoder = new TextEncoder();
         
         const stream = new ReadableStream<Uint8Array>(
-        {
-            start( controller )
             {
-                controller.enqueue( encoder.encode( chunk1 ) );
-                controller.enqueue( encoder.encode( chunk2 ) );
-                controller.close();
-            }
-        });
+                start( controller )
+                {
+                    controller.enqueue( encoder.encode( chunk1 ) );
+                    controller.enqueue( encoder.encode( chunk2 ) );
+                    controller.close();
+                }
+            } );
 
         const events = [];
 
-        for await( const ev of parseSSEStream( stream ))
+        for await ( const ev of parseSSEStream( stream ) )
         {
             events.push( ev );
         }
@@ -60,21 +60,21 @@ describe( 'Core Protocol & Streaming', () =>
         expect( events ).toHaveLength( 2 );
         expect( events[0].data ).toBe( 'first line' );
         expect( events[1].data ).toBe( 'second' );
-    });
+    } );
 
     it( 'should create stream chunks with raw property preserved', () => 
     {
         const rawPayload = { id : 'chunk-123', model : 'test-model' };
         const chunk = createStreamChunk( 'hello world', 
-        {
-            raw          : rawPayload,
-            finishReason : 'stop'
-        });
+            {
+                raw          : rawPayload,
+                finishReason : 'stop'
+            } );
 
         expect( chunk.deltaContent ).toBe( 'hello world' );
         expect( chunk.finishReason ).toBe( 'stop' );
         expect( chunk.raw ).toEqual( rawPayload );
-    });
+    } );
 
     it( 'should format MissingDependencyError with copy-pasteable install command', () => 
     {
@@ -83,7 +83,7 @@ describe( 'Core Protocol & Streaming', () =>
         expect( error.packageName ).toBe( '@anthropic-ai/sdk' );
         expect( error.installCmd ).toBe( 'npm install @anthropic-ai/sdk' );
         expect( error.message ).toContain( 'npm install @anthropic-ai/sdk' );
-    });
+    } );
 
     it( 'should format ProviderError with status code and details', () => 
     {
@@ -93,15 +93,15 @@ describe( 'Core Protocol & Streaming', () =>
         expect( error.provider ).toBe( 'openai' );
         expect( error.message ).toBe( '[openai] Unauthorized' );
         expect( error.details ).toEqual( { invalidKey : true } );
-    });
+    } );
 
     it( 'should support multimodal ChatMessage structure', () => 
     {
         const msg: ChatMessage = 
-        {
-            role        : 'user',
-            content     : 'Describe this image and audio',
-            attachments : 
+            {
+                role    : 'user',
+                content : 'Describe this image and audio',
+                attachments : 
             [
                 {
                     type     : 'image',
@@ -114,10 +114,10 @@ describe( 'Core Protocol & Streaming', () =>
                     data     : 'base64EncodedAudioData'
                 }
             ]
-        };
+            };
 
         expect( msg.attachments ).toHaveLength( 2 );
         expect( msg.attachments![0].type ).toBe( 'image' );
         expect( msg.attachments![1].type ).toBe( 'audio' );
-    });
-});
+    } );
+} );

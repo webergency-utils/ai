@@ -120,7 +120,7 @@ describe( 'content capture and redaction (R13, AE8)', () =>
         let n = 0;
         const model: ModelProtocol = 
             {
-                provider : 'openai', model : 'gpt', stream : vi.fn(),
+                provider : 'openai', model    : 'gpt', stream   : vi.fn(),
                 generate : vi.fn( async (): Promise<ModelResponse> => 
                 {
                     n++;
@@ -229,7 +229,7 @@ describe( 'content capture and redaction (R13, AE8)', () =>
         const { rootSpan, context } = collector.startTrace( { name : 'job' } );
         const inner: ModelProtocol = 
             {
-                provider : 'openai', model : 'gpt', generate : vi.fn(),
+                provider : 'openai', model    : 'gpt', generate : vi.fn(),
                 stream   : async function* ()
                 {
                     yield { deltaContent : 'say ' };
@@ -237,7 +237,7 @@ describe( 'content capture and redaction (R13, AE8)', () =>
                 }
             };
 
-        for await ( const _c of createMeteredModel( inner, { tracker : new SpendTracker(), context } ).stream( { messages : [] } ) ){ void _c }
+        for await ( const _c of createMeteredModel( inner, { tracker : new SpendTracker(), context } ).stream( { messages : [] } ) ){void _c;}
 
         const out = String( rootSpan.children[0]!.attributes['gen_ai.output.messages'] );
 
@@ -274,7 +274,7 @@ describe( 'credential safety (R14)', () =>
     {
         const failing: ModelProtocol = 
             {
-                provider : 'openai', model : 'gpt', stream : vi.fn(),
+                provider : 'openai', model    : 'gpt', stream   : vi.fn(),
                 generate : vi.fn( async () => {throw Object.assign( new Error( `401 Incorrect API key provided: ${SECRET}. Authorization: Bearer ${SECRET}` ), { name : 'ProviderError' } );} )
             };
         const collector = new TraceCollector();
@@ -368,7 +368,7 @@ describe( 'sampling (R15, AE9)', () =>
 
     it( 'rate decisions are deterministic by traceId and track the requested fraction', () => 
     {
-        const ids = Array.from( { length: 4000 }, ( _, i ) => {return createHash( 'sha256' ).update( String( i ) ).digest( 'hex' ).slice( 0, 32 );} );
+        const ids = Array.from( { length : 4000 }, ( _, i ) => {return createHash( 'sha256' ).update( String( i ) ).digest( 'hex' ).slice( 0, 32 );} );
         const first = ids.map( ( id ) => {return sampleByRate( id, 0.25 );} );
         const second = ids.map( ( id ) => {return sampleByRate( id, 0.25 );} );
         const kept = first.filter( Boolean ).length / ids.length;
@@ -433,7 +433,7 @@ describe( 'sampling (R15, AE9)', () =>
 
         exporter.attach( collector );
 
-        for( let i = 0; i < 5; i++ ){ complete( collector ) }
+        for( let i = 0; i < 5; i++ ){complete( collector );}
 
         await exporter.forceFlush();
         expect( bodies ).toHaveLength( 1 );

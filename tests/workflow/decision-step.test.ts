@@ -17,8 +17,8 @@ import {
 import { jsonResponse } from '../helpers/http.js';
 
 const questions = {
-    team    : question.choice( [ 'billing', 'technical' ] ),
-    urgent  : question.yesNo()
+    team   : question.choice( [ 'billing', 'technical' ] ),
+    urgent : question.yesNo()
 };
 
 type Answers = DecisionAnswers<typeof questions>;
@@ -114,11 +114,11 @@ describe( 'workflow decision step', () =>
         const log: string[] = [];
         const workflow = new Workflow( 'bad-route' )
             .decision( 'd', {
-                model        : scriptedModel( 'billing' ).model,
+                model    : scriptedModel( 'billing' ).model,
                 questions,
-                input        : 'x',
-                branches     : { billing : 'a', technical : 'b' },
-                route        : () => {return 'refund' as 'billing';}
+                input    : 'x',
+                branches : { billing : 'a', technical : 'b' },
+                route    : () => {return 'refund' as 'billing';}
             } )
             .step( 'a', async () => {log.push( 'a' );} )
             .step( 'b', async () => {log.push( 'b' );} );
@@ -276,14 +276,17 @@ describe( 'workflow decision step', () =>
     {
         const originalFetch = globalThis.fetch;
 
-        vi.stubGlobal( 'fetch', vi.fn().mockImplementation( async () => {return jsonResponse( {
-            model   : 'jev-1.13.0',
-            answers : {
-                team   : { type : 'choice', choice : 'technical', probabilities : { billing : 0.1, technical : 0.9 }, confidence : 0.8 },
-                urgent : { type : 'noul', noul : 0.4 }
-            },
-            usage : { input_tokens : 1_000_000, output_tokens : 50 }
-        } );} ) );
+        vi.stubGlobal( 'fetch', vi.fn().mockImplementation( async () => 
+        {
+            return jsonResponse( {
+                model   : 'jev-1.13.0',
+                answers : {
+                    team   : { type : 'choice', choice : 'technical', probabilities : { billing : 0.1, technical : 0.9 }, confidence : 0.8 },
+                    urgent : { type : 'noul', noul : 0.4 }
+                },
+                usage : { input_tokens : 1_000_000, output_tokens : 50 }
+            } );
+        } ) );
 
         try
         {

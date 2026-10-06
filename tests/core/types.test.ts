@@ -50,8 +50,8 @@ describe( 'LanguageModel contract', () =>
         const model: LanguageModel = {
             provider : 'x',
             model    : 'y',
-            generate : async () => { return { content : '', role : 'assistant', finishReason : 'stop', raw : {} }; },
-            stream   : async function* () { yield { deltaContent : '' }; }
+            generate : async () => {return { content : '', role : 'assistant', finishReason : 'stop', raw : {} };},
+            stream   : async function* () {yield { deltaContent : '' };}
         };
         const legacy: ModelProtocol = model;
         const back: LanguageModel = legacy;
@@ -88,7 +88,7 @@ describe( 'LanguageModel contract', () =>
 
         await expect( stub.generate( request ) ).rejects.toThrow( /structuredOutput/ );
         await expect( stub.generate( request ) ).rejects.toBeInstanceOf( CapabilityError );
-        await expect( ( async () => { for await ( const _ of stub.stream( request ) ) { void _; } } )() ).rejects.toThrow( /stub/ );
+        await expect( ( async () => {for await ( const _ of stub.stream( request ) ) {void _;}} )() ).rejects.toThrow( /stub/ );
         expect( fetchMock ).not.toHaveBeenCalled();
     } );
 

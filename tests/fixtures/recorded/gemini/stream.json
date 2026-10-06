@@ -1,0 +1,43 @@
+{
+    "source": "synthetic",
+    "provider": "gemini",
+    "model": "gemini-2.0-flash",
+    "recordedAt": "2026-10-06T00:00:00.000Z",
+    "note": "Hand-authored from the provider's documented wire format; the request side is produced by this adapter. Replace with a real capture via `npm run record:fixtures`.",
+    "interactions": [
+        {
+            "request": {
+                "method": "POST",
+                "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse",
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [
+                                {
+                                    "text": "Count from 1 to 3."
+                                }
+                            ]
+                        }
+                    ],
+                    "generationConfig": {
+                        "maxOutputTokens": 64
+                    }
+                }
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "content-type": "text/event-stream"
+                },
+                "chunks": [
+                    "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"1, \"}]},\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":7,\"candidatesTokenCount\":2,\"totalTokenCount\":9},\"modelVersion\":\"gemini-2.0-flash\"}\n\n",
+                    "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"2, 3\"}]},\"finishReason\":\"STOP\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":7,\"candidatesTokenCount\":6,\"totalTokenCount\":13},\"modelVersion\":\"gemini-2.0-flash\"}\n\n"
+                ]
+            }
+        }
+    ]
+}

@@ -126,7 +126,7 @@ describe( 'ToolCallStreamAssembler', () =>
 
     it( 'rejects a terminal toolCalls chunk that disagrees with fragments', () =>
     {
-        const assembler = new ToolCallStreamAssembler( { provider: 'x' } );
+        const assembler = new ToolCallStreamAssembler( { provider : 'x' } );
 
         assembler.push( tc( 0, { id : 'a', name : 'search', arguments : '{"q":"a"}' } ) );
         assembler.push( { deltaContent : '', toolCalls : [ { id : 'a', name : 'search', arguments : { q : 'b' } } ] } );
@@ -185,7 +185,7 @@ describe( 'finalizeStream', () =>
             throw new Error( 'boom' );
         }
 
-        await expect( ( async () => { for await ( const _ of finalizeStream( failing() ) ) { void _; } } )() )
+        await expect( ( async () => {for await ( const _ of finalizeStream( failing() ) ) {void _;}} )() )
             .rejects.toThrow( 'boom' );
     } );
 } );

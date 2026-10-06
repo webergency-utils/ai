@@ -22,8 +22,8 @@ function scripted( script: Script, capabilities = CAPABLE ): { model: LanguageMo
     let generateTurn = 0;
     let streamTurn = 0;
     const model: LanguageModel = {
-        provider     : 'openai',
-        model        : 'gpt-4o',
+        provider : 'openai',
+        model    : 'gpt-4o',
         capabilities,
         async generate( request: ModelRequest ): Promise<ModelResponse>
         {
@@ -64,7 +64,11 @@ describe( 'agent structured output (U4)', () =>
     it( 'refuses an outputSchema when the model lacks structuredOutput, naming provider and capability (AE7, R15)', () => 
     {
         const { model } = scripted( { responses : [] }, NO_CAPABILITIES );
-        const error = ( () => {try { new Agent( { model, outputSchema : OUTPUT_SCHEMA } ); } catch( err ){ return err; }} )();
+        const error = ( () => 
+        {
+            try {new Agent( { model, outputSchema : OUTPUT_SCHEMA } );}
+            catch( err ){return err;}
+        } )();
 
         expect( error ).toBeInstanceOf( CapabilityError );
         expect( ( error as CapabilityError ).message ).toContain( 'structuredOutput' );
@@ -73,7 +77,7 @@ describe( 'agent structured output (U4)', () =>
 
     it( 'treats a model without a capabilities field as unsupported (R15)', () => 
     {
-        const bare: LanguageModel = { provider : 'custom', model : 'm', async generate(){ throw new Error( 'unused' ); }, async* stream(){ yield* []; } };
+        const bare: LanguageModel = { provider : 'custom', model : 'm', async generate(){throw new Error( 'unused' );}, async* stream(){yield* [];} };
 
         expect( () => {return new Agent( { model : bare, outputSchema : OUTPUT_SCHEMA } );} ).toThrow( /structuredOutput/ );
     } );
@@ -193,7 +197,7 @@ describe( 'agent structured output (U4)', () =>
         } );
         const consume = async () => 
         {
-            for await ( const _event of new Agent( { model, outputSchema : OUTPUT_SCHEMA } ).runStream( 'x' ) ){ void _event; }
+            for await ( const _event of new Agent( { model, outputSchema : OUTPUT_SCHEMA } ).runStream( 'x' ) ){void _event;}
         };
 
         await expect( consume() ).rejects.toBeInstanceOf( InvalidInputError );

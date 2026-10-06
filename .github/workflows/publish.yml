@@ -3,8 +3,19 @@ name: Publish
 on:
   release:
     types: [ published ]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run every gate and `npm publish --dry-run` without publishing'
+        type: boolean
+        default: true
+      tag:
+        description: 'Release tag to verify against package.json (required when dry_run is false), e.g. v0.1.0'
+        type: string
+        required: false
 
-permissions: read-all
+permissions:
+  contents: read
 
 jobs:
   publish:
@@ -15,23 +26,62 @@ jobs:
       contents: read
       id-token: write
 
+    env:
+      # `release: published` always publishes for real; manual runs default to a dry run.
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+      RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Full history and tags so the release commit can be checked against main.
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
 
-      - name: Upgrade npm
-        run: npm install -g npm@latest
+      - name: Pin npm major (provenance support)
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
+
       - name: Build
         run: npm run build
 
+      - name: Test with coverage thresholds
+        run: npm run test:coverage
+
+      - name: Packed-artifact smoke test
+        run: npm run smoke:pack
+
+      - name: Package lint (publint, attw)
+        run: npm run lint:package
+
+      - name: Verify tag, version and branch
+        run: |
+          args=()
+          if [ -n "$RELEASE_TAG" ]; then args+=(--tag "$RELEASE_TAG"); fi
+          if [ "$DRY_RUN" != "true" ]; then args+=(--require-main); fi
+          node scripts/verify-release.mjs "${args[@]}"
+
       - name: Publish
-        run: npm publish --provenance --access public
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            npm publish --provenance --access public --dry-run
+          else
+            npm publish --provenance --access public
+          fi

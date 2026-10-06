@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { TraceCollector } from '../../src/trace/collector.js';
 import { SpanImpl } from '../../src/trace/span.js';
 import type { Span, Trace } from '../../src/trace/types.js';
@@ -80,17 +80,17 @@ describe( 'TraceCollector & Real-Time Event Bus (U5)', () =>
         root.end();
 
         const trace: Trace = 
-        {
-            traceId       : root.traceId,
-            threadId      : 'thread_abc',
-            agentId       : 'agent_xyz',
-            startTime     : root.startTime,
-            endTime       : root.endTime,
-            durationMs    : root.durationMs,
-            rootSpan      : root,
-            totalSpendUSD : root.spendUSD,
-            categorySpend : root.categorySpend
-        };
+            {
+                traceId       : root.traceId,
+                threadId      : 'thread_abc',
+                agentId       : 'agent_xyz',
+                startTime     : root.startTime,
+                endTime       : root.endTime,
+                durationMs    : root.durationMs,
+                rootSpan      : root,
+                totalSpendUSD : root.spendUSD,
+                categorySpend : root.categorySpend
+            };
 
         collector.recordCompletedTrace( trace );
 

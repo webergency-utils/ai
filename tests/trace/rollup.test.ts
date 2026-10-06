@@ -116,23 +116,23 @@ describe( 'Recursive Rollup Engine (U3)', () =>
         root.end( root.startTime + 60 );
 
         const trace: Trace = 
-        {
-            traceId       : root.traceId,
-            startTime     : root.startTime,
-            endTime       : root.endTime,
-            durationMs    : root.durationMs,
-            rootSpan      : root,
-            totalSpendUSD : 0,
-            categorySpend : {
-                model   : 0,
-                storage : 0,
-                compute : 0,
-                network : 0,
-                mcp     : 0,
-                tools   : 0,
-                custom  : 0
-            }
-        };
+            {
+                traceId       : root.traceId,
+                startTime     : root.startTime,
+                endTime       : root.endTime,
+                durationMs    : root.durationMs,
+                rootSpan      : root,
+                totalSpendUSD : 0,
+                categorySpend : {
+                    model   : 0,
+                    storage : 0,
+                    compute : 0,
+                    network : 0,
+                    mcp     : 0,
+                    tools   : 0,
+                    custom  : 0
+                }
+            };
 
         const rolledUpTrace = computeTraceRollup( trace );
 

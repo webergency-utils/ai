@@ -1,0 +1,10 @@
+{
+    "_comment": "Test files whose skips are expected in the default suite. Each entry needs a reason; everything else must run.",
+    "allow": [
+        { "file": "tests/storage/contract.test.ts",         "reason": "Postgres/Redis/S3 contract backends are env-gated; storage-integration.yml runs them with services" },
+        { "file": "tests/storage/checkpoint-race.test.ts",  "reason": "needs live Postgres/Redis (storage-integration.yml)" },
+        { "file": "tests/storage/durable-e2e.test.ts",      "reason": "needs live Postgres/Redis (storage-integration.yml)" },
+        { "file": "tests/storage/pgvector.test.ts",         "reason": "needs TEST_POSTGRES_URL (storage-integration.yml)" },
+        { "file": "tests/storage/sql-adapters.test.ts",     "reason": "SQLite suite needs node:sqlite (Node >= 22.5)" }
+    ]
+}

@@ -66,7 +66,7 @@ describe( 'Ambient ExecutionContext & Tool Reporter Hooks (U2)', () =>
                 a : schema.number(),
                 b : schema.number()
             } ),
-            execute : async( { a, b }: { a : number; b : number }, ctx ) => 
+            execute : async( { a, b }: { a : number, b : number }, ctx ) => 
             {
                 // ctx may be undefined
                 ctx?.reportSpend( { category : 'compute', costUSD : 0.0001 } );

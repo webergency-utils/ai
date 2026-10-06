@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Agent, createTool, CheckpointManager, type AgentEvent } from '../../src/agent/index.js';
+import { Agent, createTool, CheckpointManager, type AgentEvent, type SaveCheckpointInput, type ICheckpoint } from '../../src/agent/index.js';
 import { schema } from '../../src/core/index.js';
 import { AIError, BudgetRefusedError, CancelledError } from '../../src/core/error.js';
 import { MemoryDocStore } from '../../src/storage/index.js';
@@ -82,14 +82,14 @@ describe( 'parallel tool execution (U2)', () =>
     {
         const checkpoints = new CheckpointManager( new MemoryDocStore() );
         const snapshots: string[][] = [];
-        const original = checkpoints.saveCheckpoint.bind( checkpoints );
+        const original = checkpoints.saveCheckpoint.bind( checkpoints ) as ( input: SaveCheckpointInput ) => Promise<ICheckpoint>;
 
-        checkpoints.saveCheckpoint = async ( input ) => 
+        checkpoints.saveCheckpoint = ( async ( input: SaveCheckpointInput ) => 
         {
             snapshots.push( [ ...( input.completedToolIds ?? [] ) ] );
 
             return original( input );
-        };
+        } ) as typeof checkpoints.saveCheckpoint;
 
         const work = createTool( {
             name        : 'work',
@@ -103,9 +103,9 @@ describe( 'parallel tool execution (U2)', () =>
             }
         } );
         const agent = new Agent( { 
-            model : toolTurnModel( [ call( 'c1', 'work', { ms : 30 } ), call( 'c2', 'work', { ms : 1 } ), call( 'c3', 'work', { ms : 1 } ) ] ), 
-            tools : [ work ], 
-            toolConcurrency : 3, 
+            model             : toolTurnModel( [ call( 'c1', 'work', { ms : 30 } ), call( 'c2', 'work', { ms : 1 } ), call( 'c3', 'work', { ms : 1 } ) ] ), 
+            tools             : [ work ], 
+            toolConcurrency   : 3, 
             checkpointManager : checkpoints 
         } );
 
@@ -223,14 +223,14 @@ describe( 'parallel tool execution (U2)', () =>
             {
                 await sleep( 2 );
 
-                if( args.fail ){ throw new Error( 'boom' ) }
+                if( args.fail ){throw new Error( 'boom' );}
 
                 return 'fine';
             }
         } );
         const result = await new Agent( { 
-            model : toolTurnModel( [ call( 'c1', 'work', { fail : false } ), call( 'c2', 'work', { fail : true } ), call( 'c3', 'work', { fail : false } ) ] ), 
-            tools : [ work ], 
+            model           : toolTurnModel( [ call( 'c1', 'work', { fail : false } ), call( 'c2', 'work', { fail : true } ), call( 'c3', 'work', { fail : false } ) ] ), 
+            tools           : [ work ], 
             toolConcurrency : 3 
         } ).run( 'go' );
         const contents = result.messages.filter( ( m ) => {return m.role === 'tool';} ).map( ( m ) => {return m.content;} );
@@ -273,9 +273,9 @@ describe( 'parallel tool execution (U2)', () =>
             }
         } );
         const agent = new Agent( { 
-            model : toolTurnModel( [ call( 'c1', 'work' ), call( 'c2', 'fatal' ), call( 'c3', 'work' ) ] ), 
-            tools : [ sibling, fatal ], 
-            toolConcurrency : 3, 
+            model             : toolTurnModel( [ call( 'c1', 'work' ), call( 'c2', 'fatal' ), call( 'c3', 'work' ) ] ), 
+            tools             : [ sibling, fatal ], 
+            toolConcurrency   : 3, 
             checkpointManager : checkpoints 
         } );
 
@@ -336,7 +336,7 @@ describe( 'parallel tool execution (U2)', () =>
                     ? { role : 'assistant', content : '', finishReason : 'tool_calls', toolCalls : [ call( 'c1', 'work', { id : 'c1' } ), call( 'c2', 'work', { id : 'c2' } ), call( 'c3', 'work', { id : 'c3' } ) ], raw : {} }
                     : { role : 'assistant', content : 'done', finishReason : 'stop', raw : {} };
             },
-            async* stream(){ yield* []; }
+            async* stream(){yield* [];}
         };
         const agent = new Agent( { model, tools : [ work ], toolConcurrency : 3, checkpointManager : checkpoints } );
 

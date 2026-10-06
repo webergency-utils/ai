@@ -1,0 +1,61 @@
+{
+    "source": "synthetic",
+    "provider": "gemini",
+    "model": "gemini-2.0-flash",
+    "recordedAt": "2026-10-06T00:00:00.000Z",
+    "note": "Hand-authored from the provider's documented wire format; the request side is produced by this adapter. Replace with a real capture via `npm run record:fixtures`.",
+    "interactions": [
+        {
+            "request": {
+                "method": "POST",
+                "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [
+                                {
+                                    "text": "Reply with the single word: pong"
+                                }
+                            ]
+                        }
+                    ],
+                    "generationConfig": {
+                        "maxOutputTokens": 64
+                    }
+                }
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "candidates": [
+                        {
+                            "content": {
+                                "role": "model",
+                                "parts": [
+                                    {
+                                        "text": "pong"
+                                    }
+                                ]
+                            },
+                            "finishReason": "STOP",
+                            "index": 0
+                        }
+                    ],
+                    "usageMetadata": {
+                        "promptTokenCount": 8,
+                        "candidatesTokenCount": 1,
+                        "totalTokenCount": 9
+                    },
+                    "modelVersion": "gemini-2.0-flash"
+                }
+            }
+        }
+    ]
+}

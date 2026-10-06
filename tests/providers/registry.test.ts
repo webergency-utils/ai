@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ModelRegistry, createModel } from '../../src/providers/registry.js';
 import { OpenAIProviderAdapter } from '../../src/providers/openai.js';
 import { AnthropicProviderAdapter } from '../../src/providers/anthropic.js';

@@ -10,11 +10,9 @@ describe( 'ExecutionContext Spans & Lifecycle (U2)', () =>
         const ctx = new SimpleExecutionContext( { tracker } );
 
         let innerSpanId: string | undefined;
-        let outerSpanId: string | undefined;
 
         await ctx.withSpan( 'outer:op', async ( outerSpan, outerCtx ) => 
         {
-            outerSpanId = outerSpan.id;
             expect( outerCtx.activeSpan?.id ).toBe( outerSpan.id );
 
             outerCtx.reportSpend( {

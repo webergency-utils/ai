@@ -28,6 +28,17 @@ export default tseslint.config(
                 'afterColon': true
             }],
             'block-spacing': ['error', 'never'],
+            '@typescript-eslint/ban-ts-comment': ['error', {
+                'ts-expect-error': 'allow-with-description',
+                'ts-ignore': 'allow-with-description',
+                'ts-nocheck': true,
+                'minimumDescriptionLength': 10
+            }],
+            '@typescript-eslint/no-unused-vars': ['error', {
+                'argsIgnorePattern': '^_',
+                'varsIgnorePattern': '^_',
+                'caughtErrorsIgnorePattern': '^_'
+            }],
             'semi': ['error', 'always'],
             'comma-dangle': ['error', 'never'],
             '@stylistic/member-delimiter-style': ['error', {
@@ -48,6 +59,15 @@ export default tseslint.config(
                     'catch': { 'after': false }
                 }
             }]
+        }
+    },
+    {
+        // Tests deliberately reach into private state and build partial mocks (fake fetch
+        // responses, internal wire payloads); typing those precisely adds noise, not safety.
+        // Production code under src/** keeps the rule enabled.
+        files: ['tests/**/*.ts'],
+        rules: {
+            '@typescript-eslint/no-explicit-any': 'off'
         }
     }
 );

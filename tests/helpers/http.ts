@@ -104,3 +104,12 @@ export function streamResponse(
 
     return new Response( stream, { status, headers } );
 }
+
+/**
+ * Wrap a hand-built partial response object (only the members the adapter reads) as a `Response`.
+ * Prefer {@link jsonResponse}/{@link sseResponse}; this exists for tests that need a custom `body`/`json`.
+ */
+export function partialResponse( parts: Record<string, unknown> ): Response
+{
+    return parts as unknown as Response;
+}

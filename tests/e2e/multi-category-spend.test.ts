@@ -11,7 +11,6 @@ import
     type ModelResponse,
     type SpendWarningEvent
 } from '../../src/index.js';
-import { BudgetExceededError } from '../../src/core/error.js';
 
 describe( 'E2E Multi-Category Spend & Telemetry Pipeline', () => 
 {
@@ -74,6 +73,7 @@ describe( 'E2E Multi-Category Spend & Telemetry Pipeline', () =>
             {
                 provider : 'openai',
                 model    : 'gpt-4o',
+                stream   : vi.fn(),
                 generate : vi.fn( async (): Promise<ModelResponse> => 
                 {
                     turn++;
@@ -84,6 +84,7 @@ describe( 'E2E Multi-Category Spend & Telemetry Pipeline', () =>
                             role         : 'assistant',
                             content      : 'Searching knowledge...',
                             finishReason : 'tool_calls',
+                            raw          : null,
                             toolCalls : 
                             [
                                 {
@@ -105,6 +106,7 @@ describe( 'E2E Multi-Category Spend & Telemetry Pipeline', () =>
                         role         : 'assistant',
                         content      : 'Based on search, Antigravity AI is powerful.',
                         finishReason : 'stop',
+                        raw          : null,
                         usage : 
                         {
                             promptTokens     : 1_200,
@@ -188,12 +190,14 @@ describe( 'E2E Multi-Category Spend & Telemetry Pipeline', () =>
             {
                 provider : 'openai',
                 model    : 'gpt-4o',
+                stream   : vi.fn(),
                 generate : vi.fn( async (): Promise<ModelResponse> => 
                 {
                     return {
                         role         : 'assistant',
                         content      : 'Calling paid API...',
                         finishReason : 'tool_calls',
+                        raw          : null,
                         usage        : {
                             promptTokens     : 10,
                             completionTokens : 5,
@@ -212,10 +216,10 @@ describe( 'E2E Multi-Category Spend & Telemetry Pipeline', () =>
             };
 
         const agent = new Agent( {
-            model        : mockModel,
-            tools        : [ paidApiTool ],
-            spendTracker : tracker,
-            maxIterations: 1
+            model         : mockModel,
+            tools         : [ paidApiTool ],
+            spendTracker  : tracker,
+            maxIterations : 1
         } );
 
         const result = await agent.run( 'Execute paid API' );

@@ -34,24 +34,27 @@ function harness( calls: ToolCall[] = [], answer = 'final answer' ): Harness
                     ? { role : 'assistant', content : '', finishReason : 'tool_calls', toolCalls : calls, raw : {} }
                     : { role : 'assistant', content : answer, finishReason : 'stop', raw : {} };
             },
-            async* stream(){ yield* []; }
+            async* stream(){yield* [];}
         }
     };
 }
 
 function tools( invoked: string[] )
 {
-    const make = ( name: string ) => {return createTool( {
-        name,
-        description : name,
-        parameters  : schema.object( {} ),
-        execute     : async () => 
-        {
-            invoked.push( name );
+    const make = ( name: string ) => 
+    {
+        return createTool( {
+            name,
+            description : name,
+            parameters  : schema.object( {} ),
+            execute     : async () => 
+            {
+                invoked.push( name );
 
-            return `${name} done`;
-        }
-    } );};
+                return `${name} done`;
+            }
+        } );
+    };
 
     return [ make( 'delete_file' ), make( 'read_file' ) ];
 }
@@ -60,7 +63,7 @@ const deny = ( reason: string, tripwire?: boolean ): GuardrailVerdict => {return
 
 function findSpans( span: Span, name: string, found: Span[] = [] ): Span[]
 {
-    if( span.name === name ){ found.push( span ) }
+    if( span.name === name ){found.push( span );}
 
     span.children.forEach( ( child ) => {return findSpans( child, name, found );} );
 
@@ -162,7 +165,13 @@ describe( 'agent guardrails (U3)', () =>
         let runSpan: Span | undefined;
         const collector = new TraceCollector();
         const agent = new Agent( { model, collector, guardrails : { output : [ () => {return deny( 'no' );} ] } } );
-        const context = collector.createExecutionContext( { onSpanStart : ( span ) => {span.name === 'agent:run' && ( runSpan = span );} } );
+        const context = collector.createExecutionContext( { onSpanStart : ( span ) =>
+        {
+            if( span.name === 'agent:run' )
+            {
+                runSpan = span;
+            }
+        } } );
 
         await expect( agent.run( 'x', { context } ) ).rejects.toBeInstanceOf( GuardrailTripwireError );
 
@@ -201,12 +210,15 @@ describe( 'agent guardrails (U3)', () =>
     it( 'evaluates guardrails in order and stops at the first deny (R10)', async () => 
     {
         const order: string[] = [];
-        const mk = ( name: string, verdict: GuardrailVerdict ): Guardrail<{ text: string }> => {return () => 
+        const mk = ( name: string, verdict: GuardrailVerdict ): Guardrail<{ text: string }> => 
         {
-            order.push( name );
+            return () => 
+            {
+                order.push( name );
 
-            return verdict;
-        };};
+                return verdict;
+            };
+        };
         const { model } = harness( [], 'answer' );
         const agent = new Agent( { model, guardrails : { output : [ mk( 'a', { allow : true } ), mk( 'b', deny( 'b says no' ) ), mk( 'c', { allow : true } ) ] } } );
 
@@ -288,7 +300,7 @@ describe( 'agent guardrails (U3)', () =>
             originalInput : 'go'
         } );
 
-        const agent = new Agent( { model, checkpointManager : checkpoints, guardrails : { input : [ () => 
+        const agent = new Agent( { model, checkpointManager : checkpoints, guardrails        : { input : [ () => 
         {
             inputRuns++;
 

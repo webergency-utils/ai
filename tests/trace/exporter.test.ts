@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { SpanImpl } from '../../src/trace/span.js';
-import { exportTraceToJSON, exportTraceToOTLP, exportTracesToOTLP } from '../../src/trace/exporter.js';
+import { exportTraceToJSON, exportTraceToOTLP, exportTracesToOTLP, type OTLPKeyValue } from '../../src/trace/exporter.js';
 import { computeTraceRollup } from '../../src/trace/rollup.js';
 import type { Trace } from '../../src/trace/types.js';
 
@@ -29,25 +29,25 @@ describe( 'Trace Exporters (U6)', () =>
         root.end( root.startTime + 250 );
 
         const trace: Trace = 
-        {
-            traceId       : root.traceId,
-            threadId      : 'thread_123',
-            agentId       : 'agent_abc',
-            startTime     : root.startTime,
-            endTime       : root.endTime,
-            durationMs    : root.durationMs,
-            rootSpan      : root,
-            totalSpendUSD : 0,
-            categorySpend : {
-                model   : 0,
-                storage : 0,
-                compute : 0,
-                network : 0,
-                mcp     : 0,
-                tools   : 0,
-                custom  : 0
-            }
-        };
+            {
+                traceId       : root.traceId,
+                threadId      : 'thread_123',
+                agentId       : 'agent_abc',
+                startTime     : root.startTime,
+                endTime       : root.endTime,
+                durationMs    : root.durationMs,
+                rootSpan      : root,
+                totalSpendUSD : 0,
+                categorySpend : {
+                    model   : 0,
+                    storage : 0,
+                    compute : 0,
+                    network : 0,
+                    mcp     : 0,
+                    tools   : 0,
+                    custom  : 0
+                }
+            };
 
         computeTraceRollup( trace );
         return trace;
@@ -144,22 +144,22 @@ describe( 'Trace Exporters encoding correctness (R11, R12)', () =>
     function traceOf( root: SpanImpl, endTime?: number ): Trace
     {
         const trace: Trace = 
-        {
-            traceId       : root.traceId,
-            startTime     : root.startTime,
-            endTime,
-            durationMs    : endTime === undefined ? undefined : endTime - root.startTime,
-            rootSpan      : root,
-            totalSpendUSD : 0,
-            categorySpend : { model : 0, storage : 0, compute : 0, network : 0, mcp : 0, tools : 0, custom : 0 }
-        };
+            {
+                traceId       : root.traceId,
+                startTime     : root.startTime,
+                endTime,
+                durationMs    : endTime === undefined ? undefined : endTime - root.startTime,
+                rootSpan      : root,
+                totalSpendUSD : 0,
+                categorySpend : { model : 0, storage : 0, compute : 0, network : 0, mcp : 0, tools : 0, custom : 0 }
+            };
 
         computeTraceRollup( trace );
 
         return trace;
     }
 
-    function attr( span: { attributes: Array<{ key: string, value: Record<string, unknown> }> }, key: string )
+    function attr( span: { attributes: OTLPKeyValue[] }, key: string )
     {
         return span.attributes.find( ( a ) => {return a.key === key;} )?.value;
     }
