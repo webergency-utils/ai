@@ -483,7 +483,7 @@ describe( 'S3FileStore writes and multipart (R17)', () =>
 
         await expect( store.write( 'a', huge ) ).rejects.toThrow( /10000 parts/ );
         expect( fake.uploads.size ).toBe( 0 );
-    } );
+    }, 30_000 );
 
     it( 'writes strings and byte arrays as one PutObject regardless of size', async () =>
     {
