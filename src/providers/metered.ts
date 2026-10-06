@@ -6,6 +6,7 @@ import type { SpendTracker } from '../spend/tracker.js';
 import type { Span } from '../trace/types.js';
 import type { ExecutionContext } from '../agent/context.js';
 import { applyModelCallAttributes, captureContent, GENAI_ATTR } from '../trace/genai.js';
+import { toTraceparent } from '../trace/propagation.js';
 
 export interface MeteredModelOptions
 {
@@ -143,7 +144,7 @@ export class MeteredModel implements LanguageModel
         {
             this.#tagRequest( call.span, request );
 
-            const response = await this.#inner.generate( this.#withAttemptObserver( request ) );
+            const response = await this.#inner.generate( this.#withAttemptObserver( request, call.span ) );
 
             this.#recordResponse( response, call.span );
             this.#tagResponse( call.span, request, response.finishReason, response.usage );
@@ -178,7 +179,7 @@ export class MeteredModel implements LanguageModel
 
             try
             {
-                for await ( const chunk of this.#inner.stream( this.#withAttemptObserver( request ) ) )
+                for await ( const chunk of this.#inner.stream( this.#withAttemptObserver( request, call.span ) ) )
                 {
                     sawChunk = true;
 
@@ -287,12 +288,14 @@ export class MeteredModel implements LanguageModel
         } );
     }
 
-    #withAttemptObserver( request: ModelRequest ): ModelRequest
+    #withAttemptObserver( request: ModelRequest, span?: Span ): ModelRequest
     {
         const prior = request.onAttempt;
+        const traceparent = request.traceparent ?? ( span ? toTraceparent( span ) : undefined );
 
         return {
             ...request,
+            ...( traceparent ? { traceparent } : {} ),
             onAttempt : ( info ) => 
             {
                 if( info.attempt > 1 )
@@ -436,8 +439,10 @@ export class MeteredEmbeddingModel implements EmbeddingProtocol
         }
 
         const prior = options.onAttempt;
+        const traceparent = options.traceparent ?? ( span ? toTraceparent( span ) : undefined );
         const response = await this.#inner.embed( input, {
             ...options,
+            ...( traceparent ? { traceparent } : {} ),
             onAttempt : ( info ) => 
             {
                 if( info.attempt > 1 )

@@ -6,6 +6,7 @@ import type { CategorySpendBreakdown } from '../spend/types.js';
 import { AIError, BudgetRefusedError, CancelledError, CapabilityError, GuardrailTripwireError, InvalidInputError, type GuardrailStage } from '../core/error.js';
 import { finalizeStream } from '../core/tool-stream.js';
 import { applyAgentAttributes, applyModelCallAttributes, applyToolAttributes, captureContent, GENAI_ATTR } from '../trace/genai.js';
+import { toTraceparent } from '../trace/propagation.js';
 import type { Tool } from './tool.js';
 import type { CheckpointManager, AgentRunStatus, PendingToolCall } from './checkpoint.js';
 import type { JITToolRetriever } from './jit-retriever.js';
@@ -886,6 +887,7 @@ export class Agent
                     systemPrompt : this.#instructions,
                     tools        : toolDefs.length > 0 ? toolDefs : undefined,
                     signal,
+                    ...( toTraceparent( modelSpan ) ? { traceparent : toTraceparent( modelSpan ) } : {} ),
                     ...( outputSchema ? { outputSchema } : {} )
                 };
 

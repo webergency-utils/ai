@@ -9,6 +9,7 @@ import type {
     ModelStreamChunk 
 } from '../core/types.js';
 import { assertAttachmentRole } from '../core/multimodal.js';
+import { fromTraceparent } from '../trace/propagation.js';
 import { attachStructured } from '../core/structured-output.js';
 import { finalizeStream } from '../core/tool-stream.js';
 import { WarningEmitter, type WarningEvent, type WarningListener } from '../core/warning.js';
@@ -37,6 +38,8 @@ export type TransportRequestOptions =
         /** When true, do not retry after a successful HTTP response (stream body started). */
         stream? : boolean
         signal? : AbortSignal
+        /** Validated W3C `traceparent` to send; set only when the adapter opted in. */
+        traceparent? : string
         timeoutMs?     : number
         idleTimeoutMs? : number
         maxRetries?    : number
@@ -238,7 +241,7 @@ export abstract class BaseTransport
             try
             {
                 const response = await fetch( options.url, {
-                    ...options.init,
+                    ...this.#withTraceparent( options ),
                     signal : attemptController.signal
                 } );
 
@@ -396,7 +399,7 @@ export abstract class BaseTransport
 
     protected resolveTransportOptions( request: ModelRequest ): Pick<
         TransportRequestOptions, 
-        'signal' | 'timeoutMs' | 'idleTimeoutMs' | 'maxRetries' | 'onAttempt'
+        'signal' | 'timeoutMs' | 'idleTimeoutMs' | 'maxRetries' | 'onAttempt' | 'traceparent'
     >
     {
         const retry = request.retry;
@@ -408,8 +411,30 @@ export abstract class BaseTransport
             maxRetries    : retry === false 
                 ? 0 
                 : ( retry?.maxRetries ?? this.#config.maxRetries ),
-            onAttempt : request.onAttempt
+            onAttempt   : request.onAttempt,
+            // Opt-in and validated, so a malformed value can never inject into the header.
+            traceparent : this.#config.propagateTraceContext === true && fromTraceparent( request.traceparent ) 
+                ? request.traceparent 
+                : undefined
         };
+    }
+
+    #withTraceparent( options: TransportRequestOptions ): RequestInit
+    {
+        if( !options.traceparent )
+        {
+            return options.init;
+        }
+
+        const headers = new Headers( options.init.headers );
+
+        // A caller-set header wins.
+        if( !headers.has( 'traceparent' ) )
+        {
+            headers.set( 'traceparent', options.traceparent );
+        }
+
+        return { ...options.init, headers };
     }
 
     protected async handleErrorResponse( response: Response ): Promise<never>

@@ -4,6 +4,8 @@ import { InvalidInputError, ProviderError } from './error.js';
 export type EmbeddingOptions =
     {
         signal?        : AbortSignal
+        /** W3C `traceparent` of the calling span; only sent when the adapter config enables `propagateTraceContext`. */
+        traceparent?   : string
         timeoutMs?     : number
         /** false disables retries; object overrides maxRetries for this call */
         retry?         : false | { maxRetries? : number }

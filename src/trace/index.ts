@@ -9,3 +9,4 @@ export * from './exporter.js';
 export * from './otlp-http.js';
 export * from './genai.js';
 export * from './sampling.js';
+export * from './propagation.js';
