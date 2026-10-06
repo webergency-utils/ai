@@ -1,5 +1,7 @@
 // Runs inside the temporary consumer project created by scripts/smoke-pack.mjs.
 // Works under Node and Bun: imports every public subpath and asserts a known export exists.
+import { createRequire } from 'node:module';
+
 const EXPECTED = {
     '.'           : [ 'createModel', 'Agent', 'MemoryDocStore', 'SpendTracker', 'TraceCollector' ],
     './core'      : [ 'AIError', 'schema' ],
@@ -37,7 +39,8 @@ for( const [ subpath, names ] of Object.entries( EXPECTED ) )
     }
 }
 
-const { default: pkg } = await import( `${ NAME }/package.json`, { with : { type : 'json' } } );
+// `require` of a plain-string export works on every supported Node (JSON import attributes need >= 20.10).
+const pkg = createRequire( import.meta.url )( `${ NAME }/package.json` );
 
 if( pkg.name !== NAME )
 {
