@@ -4,8 +4,9 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.x     | :white_check_mark: |
-| < 1.0   | :x:                |
+| 0.x     | :white_check_mark: |
+
+While the package is pre-1.0, only the latest `0.x` minor release receives security fixes.
 
 ## Reporting a Vulnerability
 
