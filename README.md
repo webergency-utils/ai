@@ -605,6 +605,105 @@ workflow
 
 The answers are saved in the checkpoint as the step output, so a resumed run does not ask again.
 
+### Tracing & Export (OpenTelemetry)
+
+Every `Agent` run, model call, tool call, MCP call, and storage operation is a span in a `TraceCollector`. `OTLPHttpExporter` ships completed traces to any OTLP/HTTP backend (Langfuse, Phoenix, Jaeger, Grafana Tempo, Datadog, Honeycomb, a local OpenTelemetry Collector) with batching, retries, a bounded queue, and visible failures. It has no dependency on `@opentelemetry/*`.
+
+```typescript
+import { Agent } from '@webergency-utils/ai/agent';
+import { TraceCollector, OTLPHttpExporter } from '@webergency-utils/ai/trace';
+
+const collector = new TraceCollector();
+const exporter = new OTLPHttpExporter( {
+    endpoint    : 'http://localhost:4318/v1/traces', // default; a full URL
+    serviceName : 'support-bot'
+} );
+
+exporter.attach( collector );
+
+// Export never throws into your code; failures arrive as collector warnings.
+collector.on( 'warning', ( w ) => console.warn( w.code, w.message ) );
+
+const agent = new Agent( { model, tools, collector } );
+
+await agent.run( 'Where is my order?' );
+await exporter.shutdown(); // flushes queued traces
+```
+
+Spans carry [OpenTelemetry GenAI semantic-convention](https://opentelemetry.io/docs/specs/semconv/gen-ai/) attributes next to the original `model.*` / `tool.name` names, so backends render model, token, and tool data natively: `gen_ai.operation.name` (`chat`, `execute_tool`, `invoke_agent`, `embeddings`), `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.finish_reasons`, `gen_ai.tool.name`, `gen_ai.conversation.id`. Missing usage stays missing; it is never exported as zero. The semantic conventions are still experimental upstream: every name lives in `GENAI_ATTR`, and `genaiCompat: 'legacy' | 'both'` also emits the older `gen_ai.system` / `prompt_tokens` spelling.
+
+#### Backends
+
+```typescript
+// Langfuse Cloud (OTLP endpoint; basic auth is public key : secret key)
+new OTLPHttpExporter( {
+    endpoint : 'https://cloud.langfuse.com/api/public/otel/v1/traces',
+    headers  : { Authorization : `Basic ${Buffer.from( `${publicKey}:${secretKey}` ).toString( 'base64' )}` }
+} );
+
+// Honeycomb
+new OTLPHttpExporter( {
+    endpoint : 'https://api.honeycomb.io/v1/traces',
+    headers  : { 'x-honeycomb-team' : process.env.HONEYCOMB_API_KEY! }
+} );
+
+// Backends that group by span name (Jaeger, Tempo) can use the semconv shape
+new OTLPHttpExporter( { spanNameStyle : 'genai' } ); // "chat gpt-4o", "execute_tool search", "invoke_agent support"
+```
+
+Header values are sent, never stored on spans or put in warnings. Attributes whose key looks like a credential (`apiKey`, `authorization`, `rawOptions`, ...) and bearer-token / `sk-...` shaped strings are removed from exports.
+
+#### Batching, failures, and shutdown
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `maxBatchTraces` | `32` | Traces per POST |
+| `scheduleDelayMs` | `5000` | Longest wait before a partial batch is sent |
+| `maxQueueTraces` | `2048` | Queue bound; overflow drops the oldest and warns `TRACE_EXPORT_DROPPED` with a count |
+| `maxRetries` | `3` | Network errors, `408`, `429`, `502`, `503`, `504` retry with exponential backoff and jitter, honoring `Retry-After`; other `4xx` fail immediately |
+| `timeoutMs` | `10000` | Per request, and the bound on `shutdown()` flushing |
+
+Failures never throw into your code: the collector emits `warning` events (`TRACE_EXPORT_FAILED`, `TRACE_EXPORT_DROPPED`, `TRACE_EXPORT_PARTIAL`, `TRACE_ATTRIBUTE_INVALID`) and `exporter.stats` counts exported, failed, dropped, and sampled-out traces. Without a collector, pass `onError`. Timers are `unref()`ed, so the exporter never keeps the process alive. Flush on shutdown signals:
+
+```typescript
+for( const signal of [ 'SIGTERM', 'SIGINT' ] as const )
+{
+    process.once( signal, () => { void exporter.shutdown().finally( () => process.exit( 0 ) ); } );
+}
+```
+
+After `shutdown()`, `exporter.export()` rejects with `TRACE_EXPORTER_SHUTDOWN`. `forceFlush()` sends what is queued without shutting down (use it in serverless handlers).
+
+#### Privacy and sampling
+
+Prompts and completions are **not** exported by default. To opt in, configure capture on the collector (so instrumentation records it) and the exporter (so the export enforces it); a `redact` function is mandatory and construction throws without one. Content is redacted first, then truncated at `maxContentBytes` (16 KiB) with a `...truncated` marker:
+
+```typescript
+const redact = ( text: string ) => text.replace( /sk-[A-Za-z0-9_-]+/g, '[KEY]' ).replace( /\b\d{16}\b/g, '[CARD]' );
+
+const collector = new TraceCollector( { capture : { captureContent : true, redact } } );
+const exporter = new OTLPHttpExporter( { captureContent : true, redact } );
+```
+
+Captured content goes to `gen_ai.input.messages` / `gen_ai.output.messages` as JSON strings. Reduce volume with `sampleRate` (0-1, deterministic by trace id) or a custom `sampler( trace ) => boolean`; traces with an errored span are always kept unless `alwaysSampleErrors: false`.
+
+#### Trace context propagation
+
+`toTraceparent( span )` and `fromTraceparent( header )` convert to and from the W3C `traceparent` header. Sending it is opt-in: set `propagateTraceContext : true` on a provider's `ModelConfig` (the agent and metered models supply the header from the active model span), or on `StreamableHTTPTransport` / `SSETransport` for MCP (derived from the in-band `_meta` ids, which are always sent).
+
+#### Standalone model calls
+
+Outside an `Agent`, give the metered wrapper an execution context and each call becomes its own `model` span with the same attributes and spend:
+
+```typescript
+const { context } = collector.startTrace( { name : 'nightly-job' } );
+const metered = createMeteredModel( model, { tracker, context } );
+```
+
+#### Manual check against a local collector
+
+Run `docker run --rm -p 4318:4318 -p 16686:16686 -e COLLECTOR_OTLP_ENABLED=true jaegertracing/all-in-one` and point the exporter at the default endpoint; runs appear in Jaeger at `http://localhost:16686`. This is a manual smoke test; automated tests use an injected `fetch`.
+
 ## Troubleshooting
 
 ### Missing optional vendor SDK
