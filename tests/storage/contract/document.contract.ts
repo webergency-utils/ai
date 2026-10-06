@@ -233,15 +233,15 @@ export function runDocumentStoreContract( name: string, factory: ContractFactory
         it( 'rejects values JSON cannot represent, naming the path (AE3)', async () =>
         {
             const bad: Array<[ string, unknown, string ]> =
-            [
-                [ 'Date', { when : new Date() }, 'doc.when' ],
-                [ 'undefined in array', { list : [ 1, undefined ] }, 'doc.list[1]' ],
-                [ 'bigint', { deep : { big : 10n } }, 'doc.deep.big' ],
-                [ 'NaN', { n : NaN }, 'doc.n' ],
-                [ 'Infinity', { n : Infinity }, 'doc.n' ],
-                [ 'function', { f : () => {return 1;} }, 'doc.f' ],
-                [ 'Map', { m : new Map() }, 'doc.m' ]
-            ];
+                [
+                    [ 'Date', { when : new Date() }, 'doc.when' ],
+                    [ 'undefined in array', { list : [ 1, undefined ] }, 'doc.list[1]' ],
+                    [ 'bigint', { deep : { big : 10n } }, 'doc.deep.big' ],
+                    [ 'NaN', { n : NaN }, 'doc.n' ],
+                    [ 'Infinity', { n : Infinity }, 'doc.n' ],
+                    [ 'function', { f : () => {return 1;} }, 'doc.f' ],
+                    [ 'Map', { m : new Map() }, 'doc.m' ]
+                ];
 
             for( const [ label, doc, path ] of bad )
             {

@@ -4,3 +4,6 @@ export * from './cache.js';
 export * from './file.js';
 export * from './errors.js';
 export * from './instrument.js';
+export * from './adapters/sql.js';
+export * from './adapters/postgres.js';
+export * from './adapters/sqlite.js';

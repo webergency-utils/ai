@@ -144,7 +144,7 @@ export function runVectorStoreContract( name: string, factory: ContractFactory<I
 
             expect( hit.id ).toBe( 'x' );
             expect( hit.content ).toBe( 'new' );
-            expect( hit.metadata ).toEqual( { v: 2 } );
+            expect( hit.metadata ).toEqual( { v : 2 } );
             expect( hit.score ).toBeCloseTo( 1, 5 );
         } );
 
