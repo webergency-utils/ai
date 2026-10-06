@@ -18,7 +18,8 @@ import
     fromPg,
     fromIoRedis,
     RedisDocStore,
-    RedisCacheStore
+    RedisCacheStore,
+    PgVectorStore
 } from '../../src/storage/index.js';
 import type { IDocumentStore, IVectorStore, ICacheStore, IFileStore, SqlClient } from '../../src/storage/index.js';
 import type { CacheContractOptions } from './contract/cache.contract.js';
@@ -206,6 +207,20 @@ export const vectorBackends: Array<BackendEntry<IVectorStore>> =
         {
             name    : 'MemoryVectorStore',
             factory : () => {return { store : new MemoryVectorStore( { dimensions : VECTOR_CONTRACT_DIMENSIONS } ) };}
+        },
+        {
+            name    : 'PgVectorStore',
+            options : { skip : !POSTGRES_URL },
+            factory : async () =>
+            {
+                const { client, pool } = await postgresClient();
+                const table = uniqueName( 'vec' );
+                const store = new PgVectorStore( client, { table, dimensions : VECTOR_CONTRACT_DIMENSIONS } );
+
+                await store.ensureSchema();
+
+                return { store, dispose : async () => {await pool.query( `DROP TABLE IF EXISTS ${table}` );} };
+            }
         }
     ];
 
