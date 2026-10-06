@@ -19,7 +19,8 @@ import
     fromIoRedis,
     RedisDocStore,
     RedisCacheStore,
-    PgVectorStore
+    PgVectorStore,
+    S3FileStore
 } from '../../src/storage/index.js';
 import type { IDocumentStore, IVectorStore, ICacheStore, IFileStore, SqlClient } from '../../src/storage/index.js';
 import type { CacheContractOptions } from './contract/cache.contract.js';
@@ -27,6 +28,7 @@ import type { FileContractOptions } from './contract/file.contract.js';
 import type { ContractFactory, ContractHandle, ContractOptions } from './contract/shared.js';
 import { uniqueName } from './contract/shared.js';
 import { FakeRedis } from '../helpers/fake-redis.js';
+import { FakeS3 } from '../helpers/fake-s3.js';
 import { VECTOR_CONTRACT_DIMENSIONS } from './contract/vector.contract.js';
 
 export interface BackendEntry<T, O extends ContractOptions = ContractOptions>
@@ -43,6 +45,11 @@ export interface BackendEntry<T, O extends ContractOptions = ContractOptions>
 export const POSTGRES_URL = process.env.TEST_POSTGRES_URL;
 export const REDIS_URL = process.env.TEST_REDIS_URL;
 export const S3_ENDPOINT = process.env.TEST_S3_ENDPOINT;
+export const S3_ACCESS_KEY_ID = process.env.TEST_S3_ACCESS_KEY_ID;
+export const S3_SECRET_ACCESS_KEY = process.env.TEST_S3_SECRET_ACCESS_KEY;
+export const S3_BUCKET = process.env.TEST_S3_BUCKET ?? 'ai-storage-test';
+export const S3_REGION = process.env.TEST_S3_REGION ?? 'us-east-1';
+export const S3_CONFIGURED = Boolean( S3_ENDPOINT && S3_ACCESS_KEY_ID && S3_SECRET_ACCESS_KEY );
 
 /** Loads an optional driver by name; integration suites install drivers ad hoc, the package never depends on them. */
 export async function loadDriver( name: string ): Promise<any>
@@ -151,6 +158,27 @@ export async function redisHandle(): Promise<{ client: ReturnType<typeof fromIoR
             if( keys.length > 0 ){await conn.del( ...keys );}
         }
     };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  S3                                                                        */
+/* -------------------------------------------------------------------------- */
+
+/** Wraps a file store so everything a test writes is removed on dispose (object stores cannot be dropped like tables). */
+function trackedFileStore( inner: IFileStore ): { store: IFileStore, cleanup: () => Promise<void> }
+{
+    const written = new Set<string>();
+    const store: IFileStore =
+        {
+            write       : async ( p, c, o ) => {written.add( p ); return inner.write( p, c, o );},
+            read        : ( p, o ) => {return inner.read( p, o );},
+            readStream  : ( p, o ) => {return inner.readStream( p, o );},
+            delete      : ( p, o ) => {return inner.delete( p, o );},
+            exists      : ( p ) => {return inner.exists( p );},
+            getMetadata : ( p ) => {return inner.getMetadata( p );}
+        };
+
+    return { store, cleanup : async () => {await Promise.all( [ ...written ].map( ( p ) => {return inner.delete( p ).catch( () => {return false;} );} ) );} };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -277,6 +305,35 @@ export const cacheBackends: Array<BackendEntry<ICacheStore, CacheContractOptions
 export const fileBackends: Array<BackendEntry<IFileStore, FileContractOptions>> =
     [
         { name : 'MemoryFileStore', factory : () => {return { store : new MemoryFileStore() };} },
+        {
+            name    : 'S3FileStore (fake S3)',
+            options : { enforcesPaths : true },
+            factory : () =>
+            {
+                const fake = new FakeS3();
+
+                return {
+                    store : new S3FileStore( { endpoint : 'http://fake-s3.test', region : 'us-east-1', bucket : 'test-bucket', credentials : fake.credentials, fetch : fake.fetch, multipartThresholdBytes : 5, partSizeBytes : 4 } )
+                };
+            }
+        },
+        {
+            name    : 'S3FileStore',
+            options : { enforcesPaths : true, skip : !S3_CONFIGURED },
+            factory : () =>
+            {
+                const { store, cleanup } = trackedFileStore( new S3FileStore( {
+                    endpoint                : S3_ENDPOINT,
+                    region                  : S3_REGION,
+                    bucket                  : S3_BUCKET,
+                    prefix                  : uniqueName( 'contract' ),
+                    credentials             : { accessKeyId : S3_ACCESS_KEY_ID!, secretAccessKey : S3_SECRET_ACCESS_KEY! },
+                    multipartThresholdBytes : 5 * 1024 * 1024
+                } ) );
+
+                return { store, dispose : cleanup };
+            }
+        },
         {
             name    : 'LocalDiskFileStore',
             options : { enforcesPaths : true },

@@ -9,3 +9,5 @@ export * from './adapters/postgres.js';
 export * from './adapters/sqlite.js';
 export * from './adapters/redis.js';
 export * from './adapters/pgvector.js';
+export * from './adapters/s3.js';
+export * from './adapters/s3-sigv4.js';
