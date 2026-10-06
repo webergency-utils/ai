@@ -5,10 +5,8 @@ High-performance, developer-first TypeScript AI toolkit providing protocol-level
 [![npm version](https://img.shields.io/npm/v/%40webergency-utils%2Fai)](https://www.npmjs.com/package/@webergency-utils/ai)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Maintenance](https://img.shields.io/badge/maintenance-active-brightgreen.svg)](#maintenance)
-[![dependencies](https://img.shields.io/badge/dependencies-1-brightgreen.svg)](https://www.npmjs.com/package/@webergency-utils/ai?activeTab=dependencies)
 [![npm downloads](https://img.shields.io/npm/dm/%40webergency-utils%2Fai)](https://www.npmjs.com/package/@webergency-utils/ai)<br>
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/webergency-utils/ai/badge)](https://securityscorecards.dev/viewer/?uri=github.com/webergency-utils/ai)
-[![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](#)
 [![CI](https://github.com/webergency-utils/ai/actions/workflows/ci.yml/badge.svg)](https://github.com/webergency-utils/ai/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/webergency-utils/ai/actions/workflows/codeql.yml/badge.svg)](https://github.com/webergency-utils/ai/actions/workflows/codeql.yml)
 
