@@ -15,13 +15,17 @@ import
     PostgresDocStore,
     PostgresCacheStore,
     fromNodeSqlite,
-    fromPg
+    fromPg,
+    fromIoRedis,
+    RedisDocStore,
+    RedisCacheStore
 } from '../../src/storage/index.js';
 import type { IDocumentStore, IVectorStore, ICacheStore, IFileStore, SqlClient } from '../../src/storage/index.js';
 import type { CacheContractOptions } from './contract/cache.contract.js';
 import type { FileContractOptions } from './contract/file.contract.js';
 import type { ContractFactory, ContractHandle, ContractOptions } from './contract/shared.js';
 import { uniqueName } from './contract/shared.js';
+import { FakeRedis } from '../helpers/fake-redis.js';
 import { VECTOR_CONTRACT_DIMENSIONS } from './contract/vector.contract.js';
 
 export interface BackendEntry<T, O extends ContractOptions = ContractOptions>
@@ -115,6 +119,40 @@ export function postgresClient(): Promise<{ client: SqlClient, pool: any }>
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Redis                                                                     */
+/* -------------------------------------------------------------------------- */
+
+let redisConn: Promise<any> | undefined;
+
+/** Shared ioredis connection plus a per-test key prefix and a cleanup that removes everything under it. */
+export async function redisHandle(): Promise<{ client: ReturnType<typeof fromIoRedis>, prefix: string, cleanup: () => Promise<void> }>
+{
+    redisConn ??= loadDriver( 'ioredis' ).then( ( mod ) =>
+    {
+        const Redis = mod.default ?? mod.Redis;
+        const conn = new Redis( REDIS_URL );
+
+        closers.push( async () => {await conn.quit();} );
+
+        return conn;
+    } );
+
+    const conn = await redisConn;
+    const prefix = uniqueName( 'ai' );
+
+    return {
+        client  : fromIoRedis( conn ),
+        prefix,
+        cleanup : async () =>
+        {
+            const keys: string[] = await conn.keys( `${prefix}:*` );
+
+            if( keys.length > 0 ){await conn.del( ...keys );}
+        }
+    };
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Backend registries                                                        */
 /* -------------------------------------------------------------------------- */
 
@@ -131,6 +169,20 @@ export const documentBackends: Array<BackendEntry<IDocumentStore>> =
                 await store.ensureSchema();
 
                 return { store };
+            }
+        },
+        {
+            name    : 'RedisDocStore (fake client)',
+            factory : () => {return { store : new RedisDocStore( new FakeRedis() ) };}
+        },
+        {
+            name    : 'RedisDocStore',
+            options : { skip : !REDIS_URL },
+            factory : async () =>
+            {
+                const { client, prefix, cleanup } = await redisHandle();
+
+                return { store : new RedisDocStore( client, { prefix } ), dispose : cleanup };
             }
         },
         {
@@ -175,6 +227,20 @@ export const cacheBackends: Array<BackendEntry<ICacheStore, CacheContractOptions
                 await store.ensureSchema();
 
                 return { store, ...clock };
+            }
+        },
+        {
+            name    : 'RedisCacheStore (fake client)',
+            factory : () => {return { store : new RedisCacheStore( new FakeRedis() ), ...fakeClock() };}
+        },
+        {
+            name    : 'RedisCacheStore',
+            options : { skip : !REDIS_URL },
+            factory : async () =>
+            {
+                const { client, prefix, cleanup } = await redisHandle();
+
+                return { store : new RedisCacheStore( client, { prefix } ), dispose : cleanup };
             }
         },
         {

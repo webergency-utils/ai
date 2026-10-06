@@ -7,3 +7,4 @@ export * from './instrument.js';
 export * from './adapters/sql.js';
 export * from './adapters/postgres.js';
 export * from './adapters/sqlite.js';
+export * from './adapters/redis.js';
