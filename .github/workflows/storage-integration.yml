@@ -1,0 +1,92 @@
+name: Storage Integration
+
+on:
+  push:
+    branches: [ "main", "feat-*" ]
+    paths:
+      - 'src/storage/**'
+      - 'tests/storage/**'
+      - '.github/workflows/storage-integration.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'src/storage/**'
+      - 'tests/storage/**'
+      - '.github/workflows/storage-integration.yml'
+
+permissions: read-all
+
+jobs:
+  integration:
+    name: Storage backends
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ai
+          POSTGRES_PASSWORD: ai
+          POSTGRES_DB: ai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ai -d ai"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_POSTGRES_URL: postgres://ai:ai@localhost:5432/ai
+      TEST_REDIS_URL: redis://localhost:6379
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install optional driver peers
+        run: npm install --no-save pg ioredis
+
+      - name: Build
+        run: npm run build
+
+      - name: Run storage tests
+        run: npx vitest run tests/storage --reporter=verbose 2>&1 | tee storage-test.log
+
+      - name: Require Postgres and Redis suites
+        run: |
+          if ! grep -Eiq 'postgres' storage-test.log; then
+            echo 'No Postgres test output found'
+            exit 1
+          fi
+          if ! grep -Eiq 'redis' storage-test.log; then
+            echo 'No Redis test output found'
+            exit 1
+          fi
+          if grep -E '↓.*(Postgres|Redis|postgres|redis)' storage-test.log | grep -vq 'Fake\|fake\|memory'; then
+            # vitest skip marker present for a live backend name — fail
+            if grep -E '↓.*(PgVectorStore against Postgres|RedisDocStore|PostgresDocStore|against Postgres|against Redis)' storage-test.log; then
+              echo 'Live Postgres/Redis suites were skipped'
+              exit 1
+            fi
+          fi
+          echo 'Postgres/Redis integration suites executed (S3 covered by FakeS3 unit tests)'

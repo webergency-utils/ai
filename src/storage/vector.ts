@@ -1,7 +1,8 @@
 import type { ExecutionContext } from '../agent/context.js';
 import type { SpendTracker } from '../spend/tracker.js';
 import type { UnitCostRegistry } from '../spend/unit-registry.js';
-import type { CategorySpendInput } from '../spend/types.js';
+import { StorageInstrument } from './instrument.js';
+import { assertJsonSafe, assertScalarFilter } from './json.js';
 import { DimensionMismatchError } from '../core/error.js';
 
 export interface VectorRecord
@@ -56,15 +57,13 @@ export interface IVectorStore
 
 export class MemoryVectorStore implements IVectorStore
 {
-    readonly #records         = new Map<string, VectorRecord>();
-    readonly #tracker?        : SpendTracker;
-    readonly #storagePricing? : UnitCostRegistry;
-    #dimensions?              : number;
+    readonly #records    = new Map<string, VectorRecord>();
+    readonly #instrument : StorageInstrument;
+    #dimensions?         : number;
 
     constructor( options: MemoryVectorStoreOptions = {} )
     {
-        this.#tracker = options.tracker;
-        this.#storagePricing = options.storagePricing;
+        this.#instrument = new StorageInstrument( 'vector', options );
         this.#dimensions = options.dimensions;
     }
 
@@ -77,23 +76,45 @@ export class MemoryVectorStore implements IVectorStore
     {
         for( const rec of records )
         {
-            this.#assertDimensions( rec.values.length );
-            this.#records.set( rec.id, structuredClone( rec ) );
+            if( rec.metadata )
+            {
+                assertJsonSafe( rec.metadata, `records[${rec.id}].metadata` );
+            }
         }
 
-        this.#reportSpend( {
-            category    : 'storage',
-            subcategory : 'vector_write',
-            units       : records.length,
-            unitType    : 'records'
-        }, options?.context );
+        return this.#instrument.run( 'upsert', options?.context, { count : records.length }, async ( ctx ) =>
+        {
+            // Validate the whole batch first so a bad record never leaves a partial write behind.
+            const locked = this.#dimensions;
+
+            try
+            {
+                for( const rec of records )
+                {
+                    this.#assertDimensions( rec.values.length );
+                }
+            }
+            catch( err )
+            {
+                this.#dimensions = locked;
+
+                throw err;
+            }
+
+            for( const rec of records )
+            {
+                this.#records.set( rec.id, structuredClone( rec ) );
+            }
+
+            this.#instrument.spend( 'vector_write', records.length, 'records', ctx );
+        } );
     }
 
-    public async query( 
-        vector: number[], 
-        topKOrOptions: number | VectorQueryOptions = 5, 
-        filter?: Record<string, unknown>, 
-        options?: VectorStoreOperationOptions 
+    public async query(
+        vector: number[],
+        topKOrOptions: number | VectorQueryOptions = 5,
+        filter?: Record<string, unknown>,
+        options?: VectorStoreOperationOptions
     ): Promise<VectorQueryResult[]>
     {
         this.#assertDimensions( vector.length );
@@ -113,50 +134,42 @@ export class MemoryVectorStore implements IVectorStore
             topK = topKOrOptions;
         }
 
-        const scored: VectorQueryResult[] = [];
+        assertScalarFilter( filt );
 
-        for( const rec of this.#records.values() )
+        return this.#instrument.run( 'query', context, { topK }, async ( ctx ) =>
         {
-            if( !this.matchesFilter( rec.metadata, filt ) )
+            const scored: VectorQueryResult[] = [];
+
+            for( const rec of this.#records.values() )
             {
-                continue;
+                if( !this.matchesFilter( rec.metadata, filt ) ){continue;}
+
+                scored.push( {
+                    id       : rec.id,
+                    score    : this.cosineSimilarity( vector, rec.values ),
+                    metadata : rec.metadata ? structuredClone( rec.metadata ) : undefined,
+                    content  : rec.content
+                } );
             }
 
-            const score = this.cosineSimilarity( vector, rec.values );
+            scored.sort( ( a, b ) => {return b.score - a.score;} );
+            this.#instrument.spend( 'vector_query', 1, 'queries', ctx );
 
-            scored.push( {
-                id       : rec.id,
-                score,
-                metadata : rec.metadata ? structuredClone( rec.metadata ) : undefined,
-                content  : rec.content
-            } );
-        }
-
-        scored.sort( ( a, b ) => {return b.score - a.score;} );
-
-        this.#reportSpend( {
-            category    : 'storage',
-            subcategory : 'vector_query',
-            units       : 1,
-            unitType    : 'queries'
-        }, context );
-
-        return scored.slice( 0, topK );
+            return scored.slice( 0, Math.max( 0, topK ) );
+        } );
     }
 
     public async delete( ids: string[], options?: VectorStoreOperationOptions ): Promise<void>
     {
-        for( const id of ids )
+        return this.#instrument.run( 'delete', options?.context, { count : ids.length }, async ( ctx ) =>
         {
-            this.#records.delete( id );
-        }
+            for( const id of ids )
+            {
+                this.#records.delete( id );
+            }
 
-        this.#reportSpend( {
-            category    : 'storage',
-            subcategory : 'vector_delete',
-            units       : ids.length,
-            unitType    : 'records'
-        }, options?.context );
+            this.#instrument.spend( 'vector_delete', ids.length, 'records', ctx );
+        } );
     }
 
     public async count(): Promise<number>
@@ -182,28 +195,6 @@ export class MemoryVectorStore implements IVectorStore
         if( length !== this.#dimensions )
         {
             throw new DimensionMismatchError( this.#dimensions, length );
-        }
-    }
-
-    #reportSpend( entry: CategorySpendInput, context?: ExecutionContext ): void
-    {
-        if( this.#storagePricing && entry.costUSD === undefined )
-        {
-            const resolved = this.#storagePricing.resolveCost( entry );
-
-            if( resolved > 0 )
-            {
-                entry.costUSD = resolved;
-            }
-        }
-
-        if( context )
-        {
-            context.reportSpend( entry );
-        }
-        else if( this.#tracker )
-        {
-            this.#tracker.recordCategorySpend( entry );
         }
     }
 

@@ -1,7 +1,7 @@
 import type { ExecutionContext } from '../agent/context.js';
 import type { SpendTracker } from '../spend/tracker.js';
 import type { UnitCostRegistry } from '../spend/unit-registry.js';
-import type { CategorySpendInput } from '../spend/types.js';
+import { StorageInstrument } from './instrument.js';
 
 export interface CacheStoreOperationOptions
 {
@@ -34,102 +34,85 @@ interface CacheEntry
 
 export class MemoryCacheStore implements ICacheStore
 {
-    readonly #entries         = new Map<string, CacheEntry>();
-    readonly #maxEntries      : number;
+    readonly #entries            = new Map<string, CacheEntry>();
+    readonly #maxEntries         : number;
     readonly #defaultTTLSeconds? : number;
-    readonly #tracker?        : SpendTracker;
-    readonly #storagePricing? : UnitCostRegistry;
+    readonly #instrument         : StorageInstrument;
 
     constructor( options: MemoryCacheStoreOptions = {} )
     {
         this.#maxEntries = options.maxEntries ?? 10_000;
         this.#defaultTTLSeconds = options.defaultTTLSeconds;
-        this.#tracker = options.tracker;
-        this.#storagePricing = options.storagePricing;
+        this.#instrument = new StorageInstrument( 'cache', options );
     }
 
     public async get<T>( key: string, options?: CacheStoreOperationOptions ): Promise<T | null>
     {
-        this.#reportSpend( {
-            category    : 'storage',
-            subcategory : 'cache_read',
-            units       : 1,
-            unitType    : 'operations'
-        }, options?.context );
-
-        const entry = this.#entries.get( key );
-
-        if( !entry )
+        return this.#instrument.run( 'get', options?.context, undefined, async ( ctx ) =>
         {
-            return null;
-        }
+            this.#instrument.spend( 'cache_read', 1, 'operations', ctx );
 
-        if( entry.expiresAt !== undefined && Date.now() > entry.expiresAt )
-        {
+            const entry = this.#entries.get( key );
+
+            if( !entry )
+            {
+                return null;
+            }
+
+            if( entry.expiresAt !== undefined && Date.now() > entry.expiresAt )
+            {
+                this.#entries.delete( key );
+
+                return null;
+            }
+
+            // LRU touch: re-insert to move to end
             this.#entries.delete( key );
+            this.#entries.set( key, entry );
 
-            return null;
-        }
-
-        // LRU touch: re-insert to move to end
-        this.#entries.delete( key );
-        this.#entries.set( key, entry );
-
-        return structuredClone( entry.value ) as T;
+            return structuredClone( entry.value ) as T;
+        } );
     }
 
     public async set<T>( key: string, value: T, ttlSeconds?: number, options?: CacheStoreOperationOptions ): Promise<void>
     {
-        const ttl = ttlSeconds ?? this.#defaultTTLSeconds;
-        const expiresAt = ttl !== undefined ? Date.now() + ttl * 1000 : undefined;
-
-        this.#evictExpired();
-
-        if( this.#entries.has( key ) )
+        return this.#instrument.run( 'set', options?.context, undefined, async ( ctx ) =>
         {
-            this.#entries.delete( key );
-        }
-        else
-        {
-            while( this.#liveSize() >= this.#maxEntries )
+            const ttl = ttlSeconds ?? this.#defaultTTLSeconds;
+            const expiresAt = ttl !== undefined ? Date.now() + ttl * 1000 : undefined;
+
+            this.#evictExpired();
+
+            if( this.#entries.has( key ) )
             {
-                const evicted = this.#evictOne();
-
-                if( !evicted )
+                this.#entries.delete( key );
+            }
+            else
+            {
+                while( this.#liveSize() >= this.#maxEntries )
                 {
-                    break;
+                    if( !this.#evictOne() ){break;}
                 }
             }
-        }
 
-        this.#entries.set( key, {
-            value : structuredClone( value ),
-            expiresAt
+            this.#entries.set( key, { value : structuredClone( value ), expiresAt } );
+            this.#instrument.spend( 'cache_write', 1, 'operations', ctx );
         } );
-
-        this.#reportSpend( {
-            category    : 'storage',
-            subcategory : 'cache_write',
-            units       : 1,
-            unitType    : 'operations'
-        }, options?.context );
     }
 
     public async delete( key: string, options?: CacheStoreOperationOptions ): Promise<boolean>
     {
-        const deleted = this.#entries.delete( key );
-
-        if( deleted )
+        return this.#instrument.run( 'delete', options?.context, undefined, async ( ctx ) =>
         {
-            this.#reportSpend( {
-                category    : 'storage',
-                subcategory : 'cache_write',
-                units       : 1,
-                unitType    : 'operations'
-            }, options?.context );
-        }
+            const deleted = this.#entries.delete( key );
 
-        return deleted;
+            if( deleted )
+            {
+                this.#instrument.spend( 'cache_write', 1, 'operations', ctx );
+            }
+
+            return deleted;
+        } );
     }
 
     public async has( key: string ): Promise<boolean>
@@ -217,27 +200,5 @@ export class MemoryCacheStore implements ICacheStore
         this.#entries.delete( oldestKey );
 
         return true;
-    }
-
-    #reportSpend( entry: CategorySpendInput, context?: ExecutionContext ): void
-    {
-        if( this.#storagePricing && entry.costUSD === undefined )
-        {
-            const resolved = this.#storagePricing.resolveCost( entry );
-
-            if( resolved > 0 )
-            {
-                entry.costUSD = resolved;
-            }
-        }
-
-        if( context )
-        {
-            context.reportSpend( entry );
-        }
-        else if( this.#tracker )
-        {
-            this.#tracker.recordCategorySpend( entry );
-        }
     }
 }

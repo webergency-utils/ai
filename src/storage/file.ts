@@ -6,8 +6,9 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import type { ExecutionContext } from '../agent/context.js';
 import type { SpendTracker } from '../spend/tracker.js';
 import type { UnitCostRegistry } from '../spend/unit-registry.js';
-import type { CategorySpendInput } from '../spend/types.js';
+import { StorageInstrument } from './instrument.js';
 import { PathEscapeError } from '../core/error.js';
+import { assertNoNul } from './path.js';
 
 export interface FileMetadata
 {
@@ -26,7 +27,9 @@ export interface FileStoreOptions
 
 export interface FileStoreOperationOptions
 {
-    context? : ExecutionContext
+    context?     : ExecutionContext
+    /** Stored content type for backends that persist one (object stores); ignored by memory and disk stores. */
+    contentType? : string
 }
 
 export interface IFileStore
@@ -41,123 +44,103 @@ export interface IFileStore
 
 export class MemoryFileStore implements IFileStore
 {
-    readonly #files           = new Map<string, { data: Uint8Array, metadata: FileMetadata }>();
-    readonly #tracker?        : SpendTracker;
-    readonly #storagePricing? : UnitCostRegistry;
+    readonly #files      = new Map<string, { data: Uint8Array, metadata: FileMetadata }>();
+    readonly #instrument : StorageInstrument;
 
     constructor( options: FileStoreOptions = {} )
     {
-        this.#tracker = options.tracker;
-        this.#storagePricing = options.storagePricing;
+        this.#instrument = new StorageInstrument( 'file', options );
     }
 
-    public async write( 
-        filePath: string, 
-        content: Uint8Array | string | ReadableStream<Uint8Array>, 
-        options?: FileStoreOperationOptions 
+    public async write(
+        filePath: string,
+        content: Uint8Array | string | ReadableStream<Uint8Array>,
+        options?: FileStoreOperationOptions
     ): Promise<FileMetadata>
     {
-        let data: Uint8Array;
-
-        if( typeof content === 'string' )
+        return this.#instrument.run( 'write', options?.context, { path : filePath }, async ( ctx ) =>
         {
-            data = new TextEncoder().encode( content );
-        }
-        else if( content instanceof Uint8Array )
-        {
-            data = new Uint8Array( content );
-        }
-        else
-        {
-            data = await this.readWebStream( content );
-        }
+            let data: Uint8Array;
 
-        const now = new Date();
-        const existing = this.#files.get( filePath );
-        const createdAt = existing ? existing.metadata.createdAt : now;
-
-        const metadata: FileMetadata = 
+            if( typeof content === 'string' )
             {
-                path      : filePath,
-                size      : data.byteLength,
-                createdAt,
-                updatedAt : now
-            };
+                data = new TextEncoder().encode( content );
+            }
+            else if( content instanceof Uint8Array )
+            {
+                data = new Uint8Array( content );
+            }
+            else
+            {
+                data = await this.readWebStream( content );
+            }
 
-        this.#files.set( filePath, { data, metadata } );
+            const now = new Date();
+            const existing = this.#files.get( filePath );
+            const metadata: FileMetadata =
+                {
+                    path      : filePath,
+                    size      : data.byteLength,
+                    createdAt : existing ? existing.metadata.createdAt : now,
+                    updatedAt : now
+                };
 
-        this.#reportSpend( {
-            category    : 'storage',
-            subcategory : 'file_write',
-            units       : data.byteLength,
-            unitType    : 'bytes'
-        }, options?.context );
+            this.#files.set( filePath, { data, metadata } );
+            this.#instrument.spend( 'file_write', data.byteLength, 'bytes', ctx );
 
-        return metadata;
+            return metadata;
+        } );
     }
 
     public async read( filePath: string, options?: FileStoreOperationOptions ): Promise<Uint8Array | null>
     {
-        const file = this.#files.get( filePath );
-
-        if( !file )
+        return this.#instrument.run( 'read', options?.context, { path : filePath }, async ( ctx ) =>
         {
-            return null;
-        }
+            const file = this.#files.get( filePath );
 
-        this.#reportSpend( {
-            category    : 'storage',
-            subcategory : 'file_read',
-            units       : file.data.byteLength,
-            unitType    : 'bytes'
-        }, options?.context );
+            if( !file ){return null;}
 
-        return new Uint8Array( file.data );
+            this.#instrument.spend( 'file_read', file.data.byteLength, 'bytes', ctx );
+
+            return new Uint8Array( file.data );
+        } );
     }
 
     public async readStream( filePath: string, options?: FileStoreOperationOptions ): Promise<ReadableStream<Uint8Array> | null>
     {
-        const file = this.#files.get( filePath );
-
-        if( !file )
+        return this.#instrument.run( 'readStream', options?.context, { path : filePath }, async ( ctx ) =>
         {
-            return null;
-        }
+            const file = this.#files.get( filePath );
 
-        const data = file.data;
+            if( !file ){return null;}
 
-        this.#reportSpend( {
-            category    : 'storage',
-            subcategory : 'file_read',
-            units       : data.byteLength,
-            unitType    : 'bytes'
-        }, options?.context );
+            const data = file.data;
 
-        return new ReadableStream<Uint8Array>( 
-            {
+            this.#instrument.spend( 'file_read', data.byteLength, 'bytes', ctx );
+
+            return new ReadableStream<Uint8Array>( {
                 start( controller )
                 {
                     controller.enqueue( data );
                     controller.close();
                 }
             } );
+        } );
     }
 
     public async delete( filePath: string, options?: FileStoreOperationOptions ): Promise<boolean>
     {
-        const deleted = this.#files.delete( filePath );
-
-        if( deleted )
+        return this.#instrument.run( 'delete', options?.context, { path : filePath }, async ( ctx ) =>
         {
-            this.#reportSpend( {
-                category    : 'storage',
-                subcategory : 'file_delete',
-                units       : 1,
-                unitType    : 'operations'
-            }, options?.context );
-        }
+            const deleted = this.#files.delete( filePath );
 
-        return deleted;
+            if( deleted )
+            {
+                this.#instrument.spend( 'file_delete', 1, 'operations', ctx );
+            }
+
+            return deleted;
+        } );
     }
 
     public async exists( filePath: string ): Promise<boolean>
@@ -170,28 +153,6 @@ export class MemoryFileStore implements IFileStore
         const file = this.#files.get( filePath );
 
         return file ? structuredClone( file.metadata ) : null;
-    }
-
-    #reportSpend( entry: CategorySpendInput, context?: ExecutionContext ): void
-    {
-        if( this.#storagePricing && entry.costUSD === undefined )
-        {
-            const resolved = this.#storagePricing.resolveCost( entry );
-
-            if( resolved > 0 )
-            {
-                entry.costUSD = resolved;
-            }
-        }
-
-        if( context )
-        {
-            context.reportSpend( entry );
-        }
-        else if( this.#tracker )
-        {
-            this.#tracker.recordCategorySpend( entry );
-        }
     }
 
     private async readWebStream( stream: ReadableStream<Uint8Array> ): Promise<Uint8Array>
@@ -238,165 +199,143 @@ export class MemoryFileStore implements IFileStore
 
 export class LocalDiskFileStore implements IFileStore
 {
-    readonly #baseDir         : string;
-    readonly #tracker?        : SpendTracker;
-    readonly #storagePricing? : UnitCostRegistry;
+    readonly #baseDir    : string;
+    readonly #instrument : StorageInstrument;
 
     constructor( baseDir: string, options: FileStoreOptions = {} )
     {
         this.#baseDir = path.resolve( baseDir );
-        this.#tracker = options.tracker;
-        this.#storagePricing = options.storagePricing;
+        this.#instrument = new StorageInstrument( 'file', options );
     }
 
-    public async write( 
-        filePath: string, 
-        content: Uint8Array | string | ReadableStream<Uint8Array>, 
-        options?: FileStoreOperationOptions 
+    public async write(
+        filePath: string,
+        content: Uint8Array | string | ReadableStream<Uint8Array>,
+        options?: FileStoreOperationOptions
     ): Promise<FileMetadata>
     {
         const fullPath = this.resolveSafePath( filePath );
-        await fsPromises.mkdir( path.dirname( fullPath ), { recursive : true } );
 
-        if( typeof content === 'string' )
+        return this.#instrument.run( 'write', options?.context, { path : filePath }, async ( ctx ) =>
         {
-            await fsPromises.writeFile( fullPath, content, 'utf8' );
-        }
-        else if( content instanceof Uint8Array )
-        {
-            await fsPromises.writeFile( fullPath, content );
-        }
-        else
-        {
-            const nodeStream = Readable.fromWeb( content as unknown as NodeReadableStream );
-            const writeStream = fs.createWriteStream( fullPath );
-            await new Promise<void>( ( resolve, reject ) => 
+            await fsPromises.mkdir( path.dirname( fullPath ), { recursive : true } );
+
+            if( typeof content === 'string' )
             {
-                let settled = false;
-                const fail = ( err: unknown ): void => 
+                await fsPromises.writeFile( fullPath, content, 'utf8' );
+            }
+            else if( content instanceof Uint8Array )
+            {
+                await fsPromises.writeFile( fullPath, content );
+            }
+            else
+            {
+                const nodeStream = Readable.fromWeb( content as unknown as NodeReadableStream );
+                const writeStream = fs.createWriteStream( fullPath );
+
+                await new Promise<void>( ( resolve, reject ) =>
                 {
-                    if( settled ){return;}
+                    let settled = false;
+                    const fail = ( err: unknown ): void =>
+                    {
+                        if( settled ){return;}
 
-                    settled = true;
-                    writeStream.destroy();
-                    reject( err );
-                };
-                const ok = (): void => 
-                {
-                    if( settled ){return;}
+                        settled = true;
+                        writeStream.destroy();
+                        reject( err );
+                    };
+                    const ok = (): void =>
+                    {
+                        if( settled ){return;}
 
-                    settled = true;
-                    resolve();
-                };
+                        settled = true;
+                        resolve();
+                    };
 
-                nodeStream.on( 'error', fail );
-                writeStream.on( 'error', fail );
-                writeStream.on( 'finish', ok );
-                nodeStream.pipe( writeStream );
-            } );
-        }
+                    nodeStream.on( 'error', fail );
+                    writeStream.on( 'error', fail );
+                    writeStream.on( 'finish', ok );
+                    nodeStream.pipe( writeStream );
+                } );
+            }
 
-        const stat = await fsPromises.stat( fullPath );
+            const stat = await fsPromises.stat( fullPath );
 
-        this.#reportSpend( {
-            category    : 'storage',
-            subcategory : 'file_write',
-            units       : stat.size,
-            unitType    : 'bytes'
-        }, options?.context );
+            this.#instrument.spend( 'file_write', stat.size, 'bytes', ctx );
 
-        return {
-            path      : filePath,
-            size      : stat.size,
-            createdAt : stat.birthtime,
-            updatedAt : stat.mtime
-        };
+            return { path : filePath, size : stat.size, createdAt : stat.birthtime, updatedAt : stat.mtime };
+        } );
     }
 
     public async read( filePath: string, options?: FileStoreOperationOptions ): Promise<Uint8Array | null>
     {
         const fullPath = this.resolveSafePath( filePath );
 
-        try
+        return this.#instrument.run( 'read', options?.context, { path : filePath }, async ( ctx ) =>
         {
-            const buffer = await fsPromises.readFile( fullPath );
-
-            this.#reportSpend( {
-                category    : 'storage',
-                subcategory : 'file_read',
-                units       : buffer.byteLength,
-                unitType    : 'bytes'
-            }, options?.context );
-
-            return new Uint8Array( buffer.buffer, buffer.byteOffset, buffer.byteLength );
-        }
-        catch( err: unknown )
-        {
-            if( ( err as NodeJS.ErrnoException ).code === 'ENOENT' )
+            try
             {
-                return null;
-            }
+                const buffer = await fsPromises.readFile( fullPath );
 
-            throw err;
-        }
+                this.#instrument.spend( 'file_read', buffer.byteLength, 'bytes', ctx );
+
+                return new Uint8Array( buffer.buffer, buffer.byteOffset, buffer.byteLength );
+            }
+            catch( err: unknown )
+            {
+                if( ( err as NodeJS.ErrnoException ).code === 'ENOENT' ){return null;}
+
+                throw err;
+            }
+        } );
     }
 
     public async readStream( filePath: string, options?: FileStoreOperationOptions ): Promise<ReadableStream<Uint8Array> | null>
     {
         const fullPath = this.resolveSafePath( filePath );
 
-        try
+        return this.#instrument.run( 'readStream', options?.context, { path : filePath }, async ( ctx ) =>
         {
-            await fsPromises.access( fullPath );
-            const stat = await fsPromises.stat( fullPath );
-            const nodeStream = fs.createReadStream( fullPath );
-
-            this.#reportSpend( {
-                category    : 'storage',
-                subcategory : 'file_read',
-                units       : stat.size,
-                unitType    : 'bytes'
-            }, options?.context );
-
-            return Readable.toWeb( nodeStream ) as ReadableStream<Uint8Array>;
-        }
-        catch( err: unknown )
-        {
-            if( ( err as NodeJS.ErrnoException ).code === 'ENOENT' )
+            try
             {
-                return null;
-            }
+                await fsPromises.access( fullPath );
 
-            throw err;
-        }
+                const stat = await fsPromises.stat( fullPath );
+                const nodeStream = fs.createReadStream( fullPath );
+
+                this.#instrument.spend( 'file_read', stat.size, 'bytes', ctx );
+
+                return Readable.toWeb( nodeStream ) as ReadableStream<Uint8Array>;
+            }
+            catch( err: unknown )
+            {
+                if( ( err as NodeJS.ErrnoException ).code === 'ENOENT' ){return null;}
+
+                throw err;
+            }
+        } );
     }
 
     public async delete( filePath: string, options?: FileStoreOperationOptions ): Promise<boolean>
     {
         const fullPath = this.resolveSafePath( filePath );
 
-        try
+        return this.#instrument.run( 'delete', options?.context, { path : filePath }, async ( ctx ) =>
         {
-            await fsPromises.unlink( fullPath );
-
-            this.#reportSpend( {
-                category    : 'storage',
-                subcategory : 'file_delete',
-                units       : 1,
-                unitType    : 'operations'
-            }, options?.context );
-
-            return true;
-        }
-        catch( err: unknown )
-        {
-            if( ( err as NodeJS.ErrnoException ).code === 'ENOENT' )
+            try
             {
-                return false;
-            }
+                await fsPromises.unlink( fullPath );
+                this.#instrument.spend( 'file_delete', 1, 'operations', ctx );
 
-            throw err;
-        }
+                return true;
+            }
+            catch( err: unknown )
+            {
+                if( ( err as NodeJS.ErrnoException ).code === 'ENOENT' ){return false;}
+
+                throw err;
+            }
+        } );
     }
 
     public async exists( filePath: string ): Promise<boolean>
@@ -441,30 +380,10 @@ export class LocalDiskFileStore implements IFileStore
         }
     }
 
-    #reportSpend( entry: CategorySpendInput, context?: ExecutionContext ): void
-    {
-        if( this.#storagePricing && entry.costUSD === undefined )
-        {
-            const resolved = this.#storagePricing.resolveCost( entry );
-
-            if( resolved > 0 )
-            {
-                entry.costUSD = resolved;
-            }
-        }
-
-        if( context )
-        {
-            context.reportSpend( entry );
-        }
-        else if( this.#tracker )
-        {
-            this.#tracker.recordCategorySpend( entry );
-        }
-    }
-
     private resolveSafePath( filePath: string ): string
     {
+        assertNoNul( filePath );
+
         const fullPath = path.resolve( this.#baseDir, filePath );
         const rel = path.relative( this.#baseDir, fullPath );
 

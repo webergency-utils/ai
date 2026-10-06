@@ -162,36 +162,54 @@ for await ( const chunk of model.stream( { messages : [ { role : 'user', content
 
 ### Storage Subsystem
 
-The toolkit provides abstract interfaces with zero-dependency reference implementations for all major persistence tiers:
+Abstract interfaces with zero-dependency in-memory / local-disk reference drivers, plus production adapters that take **injected** clients (no new runtime dependencies):
 
 ```typescript
 import { 
     MemoryDocStore, 
     MemoryVectorStore, 
     MemoryCacheStore, 
-    LocalDiskFileStore 
+    LocalDiskFileStore,
+    PostgresDocStore,
+    fromPg,
+    RedisCacheStore,
+    fromIoRedis,
+    PgVectorStore,
+    S3FileStore
 } from '@webergency-utils/ai';
 
-// 1. Documents & Checkpoints
+// 1. Documents & Checkpoints (memory reference)
 const docStore = new MemoryDocStore();
 await docStore.set( 'users', 'u_101', { name : 'Alice', tier : 'pro' } );
 const user = await docStore.get( 'users', 'u_101' );
 
-// 2. Vector Store & Cosine Similarity
+// 2. Durable document store (inject `pg` yourself)
+// import pg from 'pg';
+// const pool = new pg.Pool( { connectionString : process.env.DATABASE_URL } );
+// const pgDocs = new PostgresDocStore( fromPg( pool ), { tablePrefix : 'ai' } );
+// await pgDocs.ensureSchema();
+
+// 3. Vector Store & Cosine Similarity
 const vectorStore = new MemoryVectorStore();
 await vectorStore.upsert( [
     { id : 'vec_1', values : [ 1, 0, 0 ], content : 'Vector math' }
 ] );
 const matches = await vectorStore.query( [ 0.95, 0.05, 0 ], 1 );
 
-// 3. Memory & TTL Cache Store
+// 4. Memory & TTL Cache Store
 const cache = new MemoryCacheStore( { maxEntries : 5000 } );
 await cache.set( 'session_token', { userId : 'u_101' }, 3600 );
 
-// 4. Local Disk File Store
+// 5. Local Disk File Store / S3-compatible object store
 const fileStore = new LocalDiskFileStore( './data/storage' );
 await fileStore.write( 'reports/monthly.pdf', new Uint8Array( [ 0x25, 0x50, 0x44, 0x46 ] ) );
+
+// const s3 = new S3FileStore( {
+//     endpoint, region, bucket, accessKeyId, secretAccessKey, forcePathStyle : true
+// } );
 ```
+
+Adapters: `PostgresDocStore` / `PostgresCacheStore`, `SqliteDocStore` / `SqliteCacheStore`, `RedisDocStore` / `RedisCacheStore` (Lua CAS), `PgVectorStore`, `S3FileStore` (native `fetch` + SigV4). Call `ensureSchema()` once before use. Integration suites run when `TEST_POSTGRES_URL`, `TEST_REDIS_URL`, and `TEST_S3_*` are set (see `.github/workflows/storage-integration.yml`).
 
 ### Spend Tracking & Pricing Engine
 
