@@ -1,0 +1,54 @@
+{
+    "source": "synthetic",
+    "provider": "anthropic",
+    "model": "claude-haiku-4-5",
+    "recordedAt": "2026-10-06T00:00:00.000Z",
+    "note": "Hand-authored from the provider's documented wire format; the request side is produced by this adapter. Replace with a real capture via `npm run record:fixtures`.",
+    "interactions": [
+        {
+            "request": {
+                "method": "POST",
+                "url": "https://api.anthropic.com/v1/messages",
+                "headers": {
+                    "content-type": "application/json",
+                    "anthropic-version": "2023-06-01"
+                },
+                "body": {
+                    "model": "claude-haiku-4-5",
+                    "max_tokens": 64,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Reply with the single word: pong"
+                        }
+                    ],
+                    "stream": false
+                }
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "id": "msg_01Xy",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-haiku-4-5",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "pong"
+                        }
+                    ],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": null,
+                    "usage": {
+                        "input_tokens": 13,
+                        "output_tokens": 4
+                    }
+                }
+            }
+        }
+    ]
+}

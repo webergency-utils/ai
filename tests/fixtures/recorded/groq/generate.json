@@ -1,0 +1,57 @@
+{
+    "source": "synthetic",
+    "provider": "groq",
+    "model": "llama-3.1-8b-instant",
+    "recordedAt": "2026-10-06T00:00:00.000Z",
+    "note": "Hand-authored from the provider's documented wire format; the request side is produced by this adapter. Replace with a real capture via `npm run record:fixtures`.",
+    "interactions": [
+        {
+            "request": {
+                "method": "POST",
+                "url": "https://api.groq.com/openai/v1/chat/completions",
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "model": "llama-3.1-8b-instant",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Reply with the single word: pong"
+                        }
+                    ],
+                    "stream": false,
+                    "max_tokens": 64
+                }
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "id": "chatcmpl-9aBcD",
+                    "object": "chat.completion",
+                    "created": 1760000000,
+                    "model": "llama-3.1-8b-instant",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "pong",
+                                "refusal": null
+                            },
+                            "finish_reason": "stop"
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 13,
+                        "completion_tokens": 2,
+                        "total_tokens": 15
+                    }
+                }
+            }
+        }
+    ]
+}
