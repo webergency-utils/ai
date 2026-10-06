@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Agent, createTool, CheckpointManager, type AgentEvent } from '../../src/agent/index.js';
+import { Agent, createTool, CheckpointManager, type AgentEvent, type SaveCheckpointInput, type ICheckpoint } from '../../src/agent/index.js';
 import { schema } from '../../src/core/index.js';
 import { AIError, BudgetRefusedError, CancelledError } from '../../src/core/error.js';
 import { MemoryDocStore } from '../../src/storage/index.js';
@@ -82,14 +82,14 @@ describe( 'parallel tool execution (U2)', () =>
     {
         const checkpoints = new CheckpointManager( new MemoryDocStore() );
         const snapshots: string[][] = [];
-        const original = checkpoints.saveCheckpoint.bind( checkpoints );
+        const original = checkpoints.saveCheckpoint.bind( checkpoints ) as ( input: SaveCheckpointInput ) => Promise<ICheckpoint>;
 
-        checkpoints.saveCheckpoint = async ( input ) => 
+        checkpoints.saveCheckpoint = ( async ( input: SaveCheckpointInput ) => 
         {
             snapshots.push( [ ...( input.completedToolIds ?? [] ) ] );
 
             return original( input );
-        };
+        } ) as typeof checkpoints.saveCheckpoint;
 
         const work = createTool( {
             name        : 'work',

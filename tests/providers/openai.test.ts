@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { OpenAIProviderAdapter } from '../../src/providers/openai.js';
 import { RateLimitError, ProviderError } from '../../src/core/error.js';
 import type { ModelRequest } from '../../src/core/types.js';
+import { partialResponse } from '../helpers/http.js';
 
 describe( 'OpenAIProviderAdapter', () => 
 {
@@ -44,11 +45,11 @@ describe( 'OpenAIProviderAdapter', () =>
             }
             };
 
-        vi.mocked( fetch ).mockResolvedValue( {
+        vi.mocked( fetch ).mockResolvedValue( partialResponse( {
             ok     : true,
             status : 200,
             json   : async () => {return mockResponseData;}
-        } );
+        } ) );
 
         const adapter = new OpenAIProviderAdapter( {
             provider : 'openai',
@@ -119,11 +120,11 @@ describe( 'OpenAIProviderAdapter', () =>
             ]
             };
 
-        vi.mocked( fetch ).mockResolvedValue( {
+        vi.mocked( fetch ).mockResolvedValue( partialResponse( {
             ok     : true,
             status : 200,
             json   : async () => {return mockResponseData;}
-        } );
+        } ) );
 
         const adapter = new OpenAIProviderAdapter( {
             provider : 'openai',
@@ -146,13 +147,13 @@ describe( 'OpenAIProviderAdapter', () =>
 
     it( 'should handle rate limit 429 error and throw RateLimitError', async () => 
     {
-        vi.mocked( fetch ).mockResolvedValue( {
+        vi.mocked( fetch ).mockResolvedValue( partialResponse( {
             ok         : false,
             status     : 429,
             statusText : 'Too Many Requests',
             headers    : new Headers( { 'retry-after' : '10' } ),
             text       : async () => {return JSON.stringify( { error : { message : 'Quota exceeded' } } );}
-        } );
+        } ) );
 
         const adapter = new OpenAIProviderAdapter( {
             provider : 'openai',
@@ -168,13 +169,13 @@ describe( 'OpenAIProviderAdapter', () =>
 
     it( 'should handle provider 500 error and throw ProviderError', async () => 
     {
-        vi.mocked( fetch ).mockResolvedValue( {
+        vi.mocked( fetch ).mockResolvedValue( partialResponse( {
             ok         : false,
             status     : 500,
             statusText : 'Internal Server Error',
             headers    : new Headers(),
             text       : async () => {return JSON.stringify( { error : { message : 'Internal server failure' } } );}
-        } );
+        } ) );
 
         const adapter = new OpenAIProviderAdapter( {
             provider : 'openai',
@@ -205,11 +206,11 @@ describe( 'OpenAIProviderAdapter', () =>
             }
         } );
 
-        vi.mocked( fetch ).mockResolvedValue( {
+        vi.mocked( fetch ).mockResolvedValue( partialResponse( {
             ok     : true,
             status : 200,
             body   : stream
-        } );
+        } ) );
 
         const adapter = new OpenAIProviderAdapter( {
             provider : 'openai',
@@ -258,11 +259,11 @@ describe( 'OpenAIProviderAdapter', () =>
             }
         } );
 
-        vi.mocked( fetch ).mockResolvedValue( {
+        vi.mocked( fetch ).mockResolvedValue( partialResponse( {
             ok     : true,
             status : 200,
             body   : stream
-        } );
+        } ) );
 
         const adapter = new OpenAIProviderAdapter( {
             provider : 'openai',

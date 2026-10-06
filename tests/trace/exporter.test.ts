@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { SpanImpl } from '../../src/trace/span.js';
-import { exportTraceToJSON, exportTraceToOTLP, exportTracesToOTLP } from '../../src/trace/exporter.js';
+import { exportTraceToJSON, exportTraceToOTLP, exportTracesToOTLP, type OTLPKeyValue } from '../../src/trace/exporter.js';
 import { computeTraceRollup } from '../../src/trace/rollup.js';
 import type { Trace } from '../../src/trace/types.js';
 
@@ -159,7 +159,7 @@ describe( 'Trace Exporters encoding correctness (R11, R12)', () =>
         return trace;
     }
 
-    function attr( span: { attributes: Array<{ key: string, value: Record<string, unknown> }> }, key: string )
+    function attr( span: { attributes: OTLPKeyValue[] }, key: string )
     {
         return span.attributes.find( ( a ) => {return a.key === key;} )?.value;
     }
