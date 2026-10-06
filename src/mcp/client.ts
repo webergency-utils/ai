@@ -609,7 +609,7 @@ export class MCPClient
             mcpSpan = context.startSpan( `mcp:call:${name}`, 
                 {
                     kind       : 'mcp',
-                    attributes : { 'mcp.tool' : name }
+                    attributes : { 'mcp.tool' : name, 'gen_ai.tool.name' : name }
                 } );
         }
 

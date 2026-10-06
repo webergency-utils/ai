@@ -6,6 +6,7 @@ import type {
     SerializedTrace,
     TraceWarningEvent
 } from './types.js';
+import { GENAI_ATTR, projectGenAIAttributes, toGenAISpanName, type GenAICompat } from './genai.js';
 
 export interface OTLPAnyValue
 {
@@ -85,6 +86,12 @@ export interface OTLPExportOptions
     onWarning?          : ( event: TraceWarningEvent ) => void
     /** Clock used to close unfinished spans; defaults to the trace end time, then `Date.now()`. */
     now?                : () => number
+    /** `genai` rewrites span names to `chat {model}` / `execute_tool {tool}` / `invoke_agent {agent}` at export time only. Default `native`. */
+    spanNameStyle?      : 'native' | 'genai'
+    /** `latest` emits `gen_ai.provider.name` / `gen_ai.usage.input_tokens`; `legacy` the pre-1.37 `gen_ai.system` / `prompt_tokens`; `both` emits both. Default `latest`. */
+    genaiCompat?        : GenAICompat
+    /** Derive GenAI attributes for spans that only carry legacy `model.*`, `tool.name`, `metrics.*` names. Default true. */
+    projectGenAI?       : boolean
 }
 
 /** Max characters of `exception.stacktrace` placed on an exception event. */
@@ -143,6 +150,7 @@ interface EncodeContext
 {
     traceId : string
     now     : number
+    options : OTLPExportOptions
     warn    : ( spanName: string, key: string, value: unknown ) => void
 }
 
@@ -229,6 +237,43 @@ function encodeAttributes( span: Span, attributes: Record<string, SpanAttributeV
     return out;
 }
 
+const LEGACY_RENAMES = new Map<string, string>( 
+    [
+        [ GENAI_ATTR.PROVIDER_NAME, GENAI_ATTR.SYSTEM_LEGACY ],
+        [ GENAI_ATTR.USAGE_INPUT_TOKENS, GENAI_ATTR.USAGE_PROMPT_TOKENS_LEGACY ],
+        [ GENAI_ATTR.USAGE_OUTPUT_TOKENS, GENAI_ATTR.USAGE_COMPLETION_TOKENS_LEGACY ]
+    ] );
+
+function applyCompat( attributes: OTLPKeyValue[], compat: GenAICompat = 'latest' ): OTLPKeyValue[]
+{
+    if( compat === 'latest' )
+    {
+        return attributes;
+    }
+
+    const out: OTLPKeyValue[] = [];
+
+    for( const attribute of attributes )
+    {
+        const legacy = LEGACY_RENAMES.get( attribute.key );
+
+        if( !legacy )
+        {
+            out.push( attribute );
+            continue;
+        }
+
+        if( compat === 'both' )
+        {
+            out.push( attribute );
+        }
+
+        out.push( { key : legacy, value : attribute.value } );
+    }
+
+    return out;
+}
+
 function encodeSpan( span: Span, ctx: EncodeContext ): OTLPSpan
 {
     const startMs = Number.isFinite( span.startTime ) ? span.startTime : ctx.now;
@@ -236,7 +281,8 @@ function encodeSpan( span: Span, ctx: EncodeContext ): OTLPSpan
     const rawEnd = span.endTime !== undefined && Number.isFinite( span.endTime ) ? span.endTime : Math.max( ctx.now, startMs );
     const endMs = Math.max( rawEnd, startMs );
 
-    const attributes = encodeAttributes( span, span.attributes, ctx );
+    const projected = ctx.options.projectGenAI === false ? {} : projectGenAIAttributes( span );
+    const attributes = encodeAttributes( span, { ...span.attributes, ...projected }, ctx );
     const addMissing = ( key: string, value: OTLPAnyValue ): void => 
     {
         if( !attributes.some( ( a ) => {return a.key === key;} ) )
@@ -327,11 +373,11 @@ function encodeSpan( span: Span, ctx: EncodeContext ): OTLPSpan
             spanId            : span.id,
             ...( span.parentSpanId ? { parentSpanId : span.parentSpanId } : {} ),
             flags             : 0x101,
-            name              : span.name,
+            name              : ctx.options.spanNameStyle === 'genai' ? toGenAISpanName( span, projected ) : span.name,
             kind              : mapSpanKindToOTLP( span.kind ),
             startTimeUnixNano : toUnixNano( startMs ),
             endTimeUnixNano   : toUnixNano( endMs ),
-            attributes,
+            attributes        : applyCompat( attributes, ctx.options.genaiCompat ),
             ...( events.length > 0 ? { events } : {} ),
             status : 
             {
@@ -397,6 +443,7 @@ export function exportTracesToOTLP(
         const ctx: EncodeContext = 
             {
                 traceId : trace.traceId,
+                options,
                 now     : trace.endTime ?? options.now?.() ?? Date.now(),
                 warn    : ( spanName, key, value ) => 
                 {
