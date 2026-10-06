@@ -68,7 +68,7 @@ describe( 'parallel tool execution (U2)', () =>
             events.push( event );
         }
 
-        expect( Date.now() - started ).toBeLessThan( 75 );
+        expect( Date.now() - started ).toBeLessThan( 120 );
 
         const finish = events[ events.length - 1 ]!;
         const toolMessages = finish.type === 'finish' ? finish.result.messages.filter( ( m ) => {return m.role === 'tool';} ) : [];

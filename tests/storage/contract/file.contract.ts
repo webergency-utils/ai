@@ -163,7 +163,7 @@ export function runFileStoreContract( name: string, factory: ContractFactory<IFi
 
         it( 'supports nested paths and names needing URI encoding', async () =>
         {
-            const paths = [ `${dir}/a/b/c.txt`, `${dir}/sp ace/ünï cødé.txt`, `${dir}/sym+bols=&?#%.txt`, `${dir}/quote's.txt` ];
+            const paths = [ `${dir}/a/b/c.txt`, `${dir}/sp ace/ünï cødé.txt`, ...( process.platform === 'win32' ? [] : [ `${dir}/sym+bols=&?#%.txt` ] ), `${dir}/quote's.txt` ];
 
             for( const p of paths )
             {
