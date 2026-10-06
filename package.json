@@ -113,7 +113,7 @@
     "devDependencies": {
         "@arethetypeswrong/cli": "^0.18.5",
         "@eslint/js": "^10.0.1",
-        "@jazzer.js/core": "^2.1.0",
+        "@jazzer.js/core": "^4.0.0",
         "@stylistic/eslint-plugin": "^5.10.0",
         "@types/node": "^24.0.10",
         "@vitest/coverage-v8": "^3.2.7",
