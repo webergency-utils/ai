@@ -4,16 +4,88 @@ import type { DecisionModel, DecisionQuestions, DecisionRequest, DecisionRespons
 import type { EmbeddingOptions, EmbeddingProtocol, EmbeddingResponse } from '../core/embeddings.js';
 import type { SpendTracker } from '../spend/tracker.js';
 import type { Span } from '../trace/types.js';
+import type { ExecutionContext } from '../agent/context.js';
+import { applyModelCallAttributes } from '../trace/genai.js';
 
 export interface MeteredModelOptions
 {
     tracker   : SpendTracker
     /** Optional override when the adapter's configured base URL is non-default. */
     baseUrl?  : string
-    /** Optional active span for post-call spend attachment (R28). */
+    /** Optional active span for post-call spend attachment (R28). GenAI attributes are set on it too. */
     getSpan?  : () => Span | undefined
+    /**
+     * Standalone telemetry: when no `getSpan` is given, each call runs in its own `model` span under this
+     * context, so non-agent users get model/token attributes and spend on a span.
+     */
+    context?  : ExecutionContext
     threadId? : string
     agentId?  : string
+}
+
+
+interface OpenedSpan
+{
+    span?  : Span
+    /** Ends a span this wrapper opened; no-op for a span supplied through `getSpan`. */
+    close( error?: unknown ): Promise<void>
+}
+
+/**
+ * Resolves the span a call reports to: the caller's `getSpan()` span, else a fresh child span of `context`
+ * (opened through `withSpan` so collector `span:end` / `trace:complete` still fire), else none.
+ */
+async function openCallSpan( 
+    name: string, 
+    getSpan?: () => Span | undefined, 
+    context?: ExecutionContext 
+): Promise<OpenedSpan>
+{
+    if( getSpan )
+    {
+        return { span : getSpan(), close : async () => {} };
+    }
+
+    if( !context )
+    {
+        return { close : async () => {} };
+    }
+
+    let release!: () => void;
+    let ready!: ( span: Span ) => void;
+    const held = new Promise<void>( ( resolve ) => {release = resolve;} );
+    const opened = new Promise<Span>( ( resolve ) => {ready = resolve;} );
+    const finished = context.withSpan( 
+        name, 
+        async ( span ) => 
+        {
+            ready( span );
+            await held;
+        }, 
+        { kind : 'model' } 
+    );
+
+    const span = await opened;
+
+    return {
+        span,
+        close : async ( error ) => 
+        {
+            if( error !== undefined )
+            {
+                span.status = 'error';
+                span.errorDetails = 
+                    {
+                        message : error instanceof Error ? error.message : String( error ),
+                        name    : error instanceof Error ? error.name : undefined,
+                        stack   : error instanceof Error ? error.stack : undefined
+                    };
+            }
+
+            release();
+            await finished;
+        }
+    };
 }
 
 /**
@@ -26,11 +98,13 @@ export class MeteredModel implements LanguageModel
     readonly #tracker : SpendTracker;
     readonly #baseUrl?: string;
     readonly #getSpan?: () => Span | undefined;
+    readonly #context?: ExecutionContext;
     readonly #threadId?: string;
     readonly #agentId?: string;
 
     constructor( inner: LanguageModel, options: MeteredModelOptions )
     {
+        this.#context = options.context;
         this.#inner = inner;
         this.#tracker = options.tracker;
         this.#baseUrl = options.baseUrl;
@@ -63,10 +137,26 @@ export class MeteredModel implements LanguageModel
     {
         this.#preflight();
 
-        const response = await this.#inner.generate( this.#withAttemptObserver( request ) );
-        this.#recordResponse( response );
+        const call = await openCallSpan( 'model:generate', this.#getSpan, this.#context );
 
-        return response;
+        try
+        {
+            this.#tagRequest( call.span, request );
+
+            const response = await this.#inner.generate( this.#withAttemptObserver( request ) );
+
+            this.#recordResponse( response, call.span );
+            this.#tagResponse( call.span, request, response.finishReason, response.usage );
+            await call.close();
+
+            return response;
+        }
+        catch( error )
+        {
+            await call.close( error );
+
+            throw error;
+        }
     }
 
     public async* stream( request: ModelRequest ): AsyncIterable<ModelStreamChunk>
@@ -74,47 +164,93 @@ export class MeteredModel implements LanguageModel
         this.#preflight();
 
         let usage: ModelResponse['usage'];
+        let finishReason: string | undefined;
         let sawChunk = false;
+        const call = await openCallSpan( 'model:stream', this.#getSpan, this.#context );
+        let failure: unknown;
 
         try
         {
-            for await ( const chunk of this.#inner.stream( this.#withAttemptObserver( request ) ) )
-            {
-                sawChunk = true;
+            this.#tagRequest( call.span, request );
 
-                if( chunk.usage )
+            try
+            {
+                for await ( const chunk of this.#inner.stream( this.#withAttemptObserver( request ) ) )
                 {
-                    usage = chunk.usage;
+                    sawChunk = true;
+
+                    if( chunk.usage )
+                    {
+                        usage = chunk.usage;
+                    }
+
+                    finishReason = chunk.finishReason ?? finishReason;
+
+                    yield chunk;
+                }
+            }
+            catch( error )
+            {
+                failure = error;
+
+                if( sawChunk )
+                {
+                    this.#tracker.recordSpendGap( 
+                        `Stream abandoned after headers for ${this.provider}:${this.model}`, 
+                        { provider : this.provider, model : this.model, error }, 
+                        { threadId : this.#threadId, agentId : this.#agentId } 
+                    );
                 }
 
-                yield chunk;
+                throw error;
             }
-        }
-        catch( error )
-        {
-            if( sawChunk )
+
+            this.#tagResponse( call.span, request, finishReason, usage );
+
+            if( usage )
+            {
+                this.#recordUsage( usage, call.span );
+            }
+            else
             {
                 this.#tracker.recordSpendGap( 
-                    `Stream abandoned after headers for ${this.provider}:${this.model}`, 
-                    { provider : this.provider, model : this.model, error }, 
+                    `Stream completed without usage for ${this.provider}:${this.model}`, 
+                    { provider : this.provider, model : this.model, usageMissing : true }, 
                     { threadId : this.#threadId, agentId : this.#agentId } 
                 );
             }
-
-            throw error;
         }
-
-        if( usage )
+        finally
         {
-            this.#recordUsage( usage );
+            // Also runs when the consumer abandons the stream, so the span never stays open.
+            await call.close( failure );
         }
-        else
+    }
+
+    #tagRequest( span: Span | undefined, request: ModelRequest ): void
+    {
+        if( span )
         {
-            this.#tracker.recordSpendGap( 
-                `Stream completed without usage for ${this.provider}:${this.model}`, 
-                { provider : this.provider, model : this.model, usageMissing : true }, 
-                { threadId : this.#threadId, agentId : this.#agentId } 
-            );
+            applyModelCallAttributes( span, 
+                {
+                    provider : this.provider,
+                    model    : this.model,
+                    request  : { temperature : request.temperature, maxTokens : request.maxTokens }
+                } );
+        }
+    }
+
+    #tagResponse( span: Span | undefined, request: ModelRequest, finishReason: string | undefined, usage: ModelResponse['usage'] ): void
+    {
+        if( span )
+        {
+            applyModelCallAttributes( span, 
+                {
+                    provider : this.provider,
+                    model    : this.model,
+                    request  : { temperature : request.temperature, maxTokens : request.maxTokens },
+                    response : { finishReason, usage }
+                } );
         }
     }
 
@@ -156,7 +292,7 @@ export class MeteredModel implements LanguageModel
         };
     }
 
-    #recordResponse( response: ModelResponse ): void
+    #recordResponse( response: ModelResponse, span?: Span ): void
     {
         if( response.usageMissing || !response.usage )
         {
@@ -171,17 +307,15 @@ export class MeteredModel implements LanguageModel
             return;
         }
 
-        this.#recordUsage( response.usage );
+        this.#recordUsage( response.usage, span );
     }
 
-    #recordUsage( usage: NonNullable<ModelResponse['usage']> ): void
+    #recordUsage( usage: NonNullable<ModelResponse['usage']>, span?: Span ): void
     {
         const details = this.#tracker.record( this.model, usage, {
             provider : this.provider,
             baseUrl  : this.#baseUrl
         } );
-
-        const span = this.#getSpan?.();
 
         if( span )
         {
@@ -214,11 +348,13 @@ export class MeteredEmbeddingModel implements EmbeddingProtocol
     readonly #tracker : SpendTracker;
     readonly #baseUrl?: string;
     readonly #getSpan?: () => Span | undefined;
+    readonly #context?: ExecutionContext;
     readonly #threadId?: string;
     readonly #agentId?: string;
 
     constructor( inner: EmbeddingProtocol, options: MeteredModelOptions )
     {
+        this.#context = options.context;
         this.#inner = inner;
         this.#tracker = options.tracker;
         this.#baseUrl = options.baseUrl;
@@ -250,6 +386,31 @@ export class MeteredEmbeddingModel implements EmbeddingProtocol
             baseUrl  : this.#baseUrl
         } );
 
+        const call = await openCallSpan( 'model:embed', this.#getSpan, this.#context );
+
+        try
+        {
+            const response = await this.#embed( input, options, call.span );
+
+            await call.close();
+
+            return response;
+        }
+        catch( error )
+        {
+            await call.close( error );
+
+            throw error;
+        }
+    }
+
+    async #embed( input: string | string[], options: EmbeddingOptions, span?: Span ): Promise<EmbeddingResponse>
+    {
+        if( span )
+        {
+            applyModelCallAttributes( span, { provider : this.provider, model : this.model, operation : 'embeddings' } );
+        }
+
         const prior = options.onAttempt;
         const response = await this.#inner.embed( input, {
             ...options,
@@ -275,6 +436,17 @@ export class MeteredEmbeddingModel implements EmbeddingProtocol
             }
         } );
 
+        if( span )
+        {
+            applyModelCallAttributes( span, 
+                {
+                    provider  : this.provider,
+                    model     : this.model,
+                    operation : 'embeddings',
+                    response  : { usage : response.usage, dimensions : response.vectors?.[0]?.length }
+                } );
+        }
+
         if( !response.usage )
         {
             this.#tracker.recordSpendGap( 
@@ -290,8 +462,6 @@ export class MeteredEmbeddingModel implements EmbeddingProtocol
             provider : this.provider,
             baseUrl  : this.#baseUrl
         } );
-        const span = this.#getSpan?.();
-
         if( span )
         {
             span.recordSpend( {
@@ -407,6 +577,7 @@ export class MeteredDecisionModel implements DecisionModel
 
         if( span )
         {
+            applyModelCallAttributes( span, { provider : this.provider, model : this.model, response : { usage : response.usage } } );
             span.recordSpend( {
                 category    : 'model',
                 subcategory : this.model,

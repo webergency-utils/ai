@@ -21,6 +21,10 @@ export interface OTLPHttpExporterOptions
     serviceName?         : string
     serviceVersion?      : string
     resourceAttributes?  : OTLPExportOptions['resourceAttributes']
+    /** `genai` renames spans to `chat {model}` / `execute_tool {tool}` / `invoke_agent {agent}` in the export only. Default `native`. */
+    spanNameStyle?       : OTLPExportOptions['spanNameStyle']
+    /** `latest` (default), `legacy` (`gen_ai.system`, `prompt_tokens`) or `both`. */
+    genaiCompat?         : OTLPExportOptions['genaiCompat']
     /** Injectable `fetch`; defaults to the global one. */
     fetch?               : OTLPFetch
     /** Traces per POST. Default 32. */
@@ -190,6 +194,8 @@ export class OTLPHttpExporter
                 serviceName        : options.serviceName,
                 serviceVersion     : options.serviceVersion,
                 resourceAttributes : options.resourceAttributes,
+                spanNameStyle      : options.spanNameStyle,
+                genaiCompat        : options.genaiCompat,
                 now                : this.#now
             };
     }

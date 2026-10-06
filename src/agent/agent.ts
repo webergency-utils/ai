@@ -5,6 +5,7 @@ import type { SpendTracker } from '../spend/tracker.js';
 import type { CategorySpendBreakdown } from '../spend/types.js';
 import { AIError, BudgetRefusedError, CancelledError, CapabilityError, GuardrailTripwireError, InvalidInputError, type GuardrailStage } from '../core/error.js';
 import { finalizeStream } from '../core/tool-stream.js';
+import { applyAgentAttributes, applyModelCallAttributes, applyToolAttributes } from '../trace/genai.js';
 import type { Tool } from './tool.js';
 import type { CheckpointManager, AgentRunStatus, PendingToolCall } from './checkpoint.js';
 import type { JITToolRetriever } from './jit-retriever.js';
@@ -613,6 +614,7 @@ export class Agent
                 runSpan.setAttribute( 'agent.id', agentId );
                 runSpan.setAttribute( 'agent.threadId', threadId );
                 runSpan.setAttribute( 'agent.runId', runId );
+                applyAgentAttributes( runSpan, { id : agentId, threadId } );
 
                 try
                 {
@@ -869,9 +871,6 @@ export class Agent
             streaming ? 'model:stream' : 'model:generate', 
             async ( modelSpan ) => 
             {
-                modelSpan.setAttribute( 'model.provider', this.#model.provider );
-                modelSpan.setAttribute( 'model.name', this.#model.model );
-
                 const model = this.#spendTracker 
                     ? createMeteredModel( this.#model, {
                         tracker : this.#spendTracker,
@@ -889,6 +888,13 @@ export class Agent
                     signal,
                     ...( outputSchema ? { outputSchema } : {} )
                 };
+
+                applyModelCallAttributes( modelSpan, 
+                    {
+                        provider : this.#model.provider,
+                        model    : this.#model.model,
+                        request  : { temperature : request.temperature, maxTokens : request.maxTokens }
+                    } );
 
                 let response: StepResponse;
 
@@ -949,6 +955,14 @@ export class Agent
                         ...( resp.reasoningContent !== undefined ? { reasoningContent : resp.reasoningContent } : {} )
                     };
                 }
+
+                applyModelCallAttributes( modelSpan, 
+                    {
+                        provider : this.#model.provider,
+                        model    : this.#model.model,
+                        request  : { temperature : request.temperature, maxTokens : request.maxTokens },
+                        response : { finishReason : response.finishReason, usage : response.usage }
+                    } );
 
                 if( response.usage )
                 {
@@ -1056,6 +1070,7 @@ export class Agent
                 async ( toolSpan, toolCtx ) => 
                 {
                     toolSpan.setAttribute( 'tool.name', tc.name );
+                    applyToolAttributes( toolSpan, { name : tc.name, callId : tc.id } );
 
                     return await tool.run( tc.arguments, toolCtx, { signal } );
                 }, 
