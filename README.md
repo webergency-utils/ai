@@ -1,6 +1,6 @@
 # @webergency-utils/ai
 
-High-performance, developer-first TypeScript AI toolkit providing protocol-level model execution, multimodal support, dynamic provider imports, abstract storage contracts, token spend tracking, Model Context Protocol (MCP) tooling, and autonomous agent orchestration for Node.js (20+) and Bun.
+High-performance, developer-first TypeScript AI toolkit providing protocol-level model execution, multimodal support, dynamic provider imports, abstract storage contracts, token spend tracking, Model Context Protocol (MCP) tooling, and autonomous agent orchestration. ESM-only, for Node.js `>=20.3.0` (Bun smoke-tested, see [Runtime support](#runtime-support)).
 
 [![npm version](https://img.shields.io/npm/v/%40webergency-utils%2Fai)](https://www.npmjs.com/package/@webergency-utils/ai)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -12,6 +12,7 @@ High-performance, developer-first TypeScript AI toolkit providing protocol-level
 
 ## TL;DR
 
+<!-- check -->
 ```typescript
 import { createModel, createTool, Agent, MemoryDocStore, CheckpointManager, schema } from '@webergency-utils/ai';
 
@@ -26,7 +27,7 @@ const weatherTool = createTool( {
     name        : 'get_weather',
     description : 'Get the current weather forecast for a city',
     parameters  : schema.object( {
-        city : schema.string().describe( 'City name' )
+        city : schema.string( { description : 'City name' } )
     }),
     execute : async ( args ) => 
     {
@@ -56,6 +57,15 @@ Install the core package using your preferred package manager:
 npm install @webergency-utils/ai
 ```
 
+### Runtime support
+
+| Runtime | Status |
+|---|---|
+| Node.js `>=20.3.0` | Full test suite on Node 20, 22 and 24 (Linux), plus Node 22 on Windows and macOS. |
+| Bun | Smoke-tested in CI: the packed tarball is imported under Bun, and the core, provider (recorded replay), in-memory storage and in-memory MCP test files run under `bun x --bun vitest`. The full suite (and the Node-specific storage drivers) is not run on Bun. |
+
+The package is **ESM-only** (`"type": "module"`, `import` conditions only). From CommonJS use dynamic `import()`. Nothing in the package has install-time side effects (`"sideEffects": false`), and no vendor SDK is required: the built-in adapters use `fetch`.
+
 ### Peer Dependencies
 
 The core library ships with zero required external dependencies outside of `@webergency-utils/typechecker`. Official vendor SDKs are optional peer dependencies loaded lazily if you choose to bridge an existing SDK client instance:
@@ -75,7 +85,11 @@ When using built-in native REST/SSE adapters without explicitly providing `apiKe
 | `ANTHROPIC_API_KEY` | `anthropic` | Anthropic Messages API key |
 | `GEMINI_API_KEY` | `gemini` | Google AI Gemini API key |
 | `GROQ_API_KEY` | `groq` | Groq Cloud fast inference key |
+| `MISTRAL_API_KEY` | `mistral` | Mistral La Plateforme key |
+| `DEEPSEEK_API_KEY` | `deepseek` | DeepSeek platform key |
 | `TYPESAFE_API_KEY` | `typesafe` (`jev`) | TypeSafe Jev decision model key |
+
+`ollama` needs no key; it talks to `http://localhost:11434` unless `baseUrl` is set. Any provider accepts `apiKey`, or `apiKeyEnvVar` to read a differently named variable.
 
 ## Architecture & Internals
 
@@ -94,7 +108,8 @@ When using built-in native REST/SSE adapters without explicitly providing `apiKe
 │         │               ├─ OpenAI (REST / SSE)         │
 │         │               ├─ Anthropic (Messages / SSE)  │
 │         │               ├─ Gemini (Generate / SSE)     │
-│         │               ├─ Groq & Ollama               │
+│         │               ├─ Groq, Mistral, DeepSeek     │
+│         │               ├─ Ollama                      │
 │         │               └─ Optional SDK Lazy Bridge    │
 │         │                                              │
 │         ▼                                              │
@@ -114,7 +129,7 @@ When using built-in native REST/SSE adapters without explicitly providing `apiKe
 
 ## Glossary
 
-- **`ModelProtocol`**: Normalized interface (`generate`, `stream`) implemented by all provider adapters.
+- **`LanguageModel`**: Normalized interface (`generate`, `stream`, optional `capabilities`) implemented by all provider adapters. `ModelProtocol` is an alias kept for existing imports.
 - **`ModelRegistry`**: Dynamic provider resolver that instantiates and caches provider adapters without boot-time static vendor imports.
 - **`BaseProviderAdapter`**: Abstract adapter base class handling HTTP request serialization, streaming SSE parsing, and standardized error mapping.
 - **`Tool`**: Executable function unit bundling a JSON Schema / typechecker parameter validator, description, and execution logic.
@@ -130,38 +145,195 @@ When using built-in native REST/SSE adapters without explicitly providing `apiKe
 
 ### Dynamic Model Provider Resolution
 
-#### `createModel( config: ModelConfig ): ModelProtocol`
+#### `createModel( config: ModelConfig ): LanguageModel`
 
-Resolves and caches a model provider adapter.
+Resolves and caches a model provider adapter. Providers: `openai`, `anthropic`, `gemini`, `groq`, `mistral`, `deepseek`, `ollama` (OpenAI-compatible servers work through `openai` with `baseUrl`). Every call is retried (`maxRetries`, default 2) on network errors and `408`/`429`/`5xx`, honoring `retry-after`; set `retry : false` on a request to disable.
 
+<!-- check -->
 ```typescript
 import { createModel } from '@webergency-utils/ai';
 
 const model = createModel( {
     provider    : 'anthropic',
-    model       : 'claude-3-7-sonnet-20250219',
+    model       : 'claude-sonnet-4-5',
     temperature : 0.7
 });
 
 const response = await model.generate( {
     messages : [ { role : 'user', content : 'Summarize modern distributed systems architecture' } ]
 });
-console.log( response.content );
+
+console.log( response.content );        // text
+console.log( response.finishReason );   // 'stop' | 'tool_calls' | 'length' | 'content_filter' | 'error' | 'other'
+console.log( response.usage );          // { promptTokens, completionTokens, totalTokens, reasoningTokens?, cachedPromptReadTokens?, ... }
+console.log( response.usageMissing );   // true when the provider reported no usage (never treated as free)
 ```
 
-#### Streaming SSE Generation
+#### Streaming
 
+`stream()` yields `ModelStreamChunk`s. Text arrives as `deltaContent`; the terminal chunk carries `finishReason` and, when the provider reports it, `usage`. Tool calls stream as `deltaToolCall` fragments and the terminal chunk carries the assembled, argument-parsed `toolCalls`.
+
+<!-- check -->
 ```typescript
+import { createModel } from '@webergency-utils/ai';
+
+const model = createModel( { provider : 'openai', model : 'gpt-4o-mini' } );
+
+let text = '';
+
 for await ( const chunk of model.stream( { messages : [ { role : 'user', content : 'Stream a poem' } ] } ) )
 {
-    process.stdout.write( chunk.deltaContent );
+    text += chunk.deltaContent;
+
+    if( chunk.deltaReasoningContent ) process.stderr.write( chunk.deltaReasoningContent );
+
+    if( chunk.finishReason )
+    {
+        console.log( chunk.finishReason, chunk.usage, chunk.toolCalls );   // terminal chunk
+    }
 }
+```
+
+Streaming responses are never retried once headers have arrived, and an idle stream is aborted after `idleTimeoutMs`.
+
+#### Tool calls
+
+Pass `tools` (name, description, JSON Schema `parameters`) and optionally `toolChoice` (`'auto'`, `'none'`, `'required'` or `{ name }`). Calls come back as `response.toolCalls` (`{ id, name, arguments }`, arguments already parsed); answer them with `role : 'tool'` messages that carry the `toolCallId`. `Agent` runs this loop for you.
+
+<!-- check -->
+```typescript
+import { createModel } from '@webergency-utils/ai';
+import type { ChatMessage, ToolDefinition } from '@webergency-utils/ai';
+
+const model = createModel( { provider : 'openai', model : 'gpt-4o-mini' } );
+const tools: ToolDefinition[] = [ {
+    name        : 'get_weather',
+    description : 'Get the weather for a city',
+    parameters  : { type : 'object', properties : { city : { type : 'string' } }, required : [ 'city' ] }
+} ];
+
+const messages: ChatMessage[] = [ { role : 'user', content : 'Weather in Prague?' } ];
+const first = await model.generate( { messages, tools } );
+
+for( const call of first.toolCalls ?? [] )
+{
+    messages.push( { role : 'assistant', content : first.content, toolCalls : first.toolCalls } );
+    messages.push( { role : 'tool', toolCallId : call.id, name : call.name, content : JSON.stringify( { tempC : 18 } ) } );
+}
+
+const answer = await model.generate( { messages, tools } );
+```
+
+#### Model capabilities
+
+Each adapter reports honest `capabilities`; unsupported requests fail with a `CapabilityError` that names the provider and the missing feature instead of being silently dropped. Config can override the defaults for a specific model (`createModel( { ..., capabilities : { structuredOutput : false } } )`). The table below is generated from the adapters' flags (`npm run gen:capabilities`) and CI fails if it drifts.
+
+<!-- capabilities:start -->
+| Provider | Structured output | Reasoning content | Prompt cache | Embeddings | Image | Audio | Video | Document |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `openai` | yes | yes | yes | yes | yes | yes | - | yes |
+| `anthropic` | yes | - | yes | - | yes | - | - | yes |
+| `gemini` | yes | - | - | yes | yes | yes | yes | yes |
+| `groq` | yes | yes | - | - | yes | - | - | - |
+| `mistral` | yes | - | - | - | yes | - | - | - |
+| `deepseek` | yes | yes | - | - | - | - | - | - |
+| `ollama` | yes | - | - | yes | yes | - | - | - |
+<!-- capabilities:end -->
+
+Custom `LanguageModel` implementations may omit `capabilities`; `getCapabilities( model )` treats that as "nothing supported".
+
+#### Structured output
+
+`outputSchema` (a JSON Schema or a `schema.*` builder) makes the response carry a parsed and validated `structured` value. The adapter picks the strongest wire mode the provider offers (`json_schema` by default; `outputMode : 'json'` for plain JSON mode with the schema injected as an instruction). A truncated or refused answer throws instead of returning partial JSON. Streaming delivers `structured` on the terminal chunk.
+
+<!-- check -->
+```typescript
+import { createModel, generateStructured, schema } from '@webergency-utils/ai';
+
+const model = createModel( { provider : 'openai', model : 'gpt-4o-mini' } );
+
+const { structured } = await generateStructured<{ label: string }>( model, {
+    messages     : [ { role : 'user', content : 'Classify: "I love this library"' } ],
+    outputSchema : schema.object( { label : schema.enum( [ 'positive', 'negative', 'neutral' ] ) } )
+} );
+
+console.log( structured.label );
+```
+
+#### Reasoning content
+
+Providers that expose reasoning text (`reasoningContent` capability) return it as `response.reasoningContent` and stream it as `deltaReasoningContent`; reasoning token counts appear in `usage.reasoningTokens`. Pass an assistant message's `reasoningContent` back unchanged in later turns where the provider requires it (the agent loop does this for you).
+
+#### Multimodal input
+
+Attach media to **user** messages with `attachments` (`{ type, mimeType, data | url }`). Support is per provider (see the table above); an unsupported type throws `CapabilityError` before any request is sent, and attachments on non-user messages throw `InvalidInputError`.
+
+| Provider | Accepted attachments | Notes |
+|---|---|---|
+| `openai` | image (bytes or URL), audio, document | audio and documents must be supplied as bytes |
+| `anthropic` | image, document | bytes or URL |
+| `gemini` | image, audio, video, document | bytes are sent inline, URL-only attachments as `fileData` |
+| `groq`, `mistral` | image | |
+| `ollama` | image | base64 bytes only; a URL-only image is rejected |
+| `deepseek` | none | |
+
+<!-- check -->
+```typescript
+import { createModel } from '@webergency-utils/ai';
+import { readFile } from 'node:fs/promises';
+
+const model = createModel( { provider : 'gemini', model : 'gemini-2.0-flash' } );
+
+const response = await model.generate( {
+    messages : [ {
+        role        : 'user',
+        content     : 'What is in this picture?',
+        attachments : [ { type : 'image', mimeType : 'image/png', data : await readFile( './photo.png' ) } ]
+    } ]
+} );
+```
+
+#### Prompt caching
+
+Providers with `promptCacheControl` accept cache hints; others reject them with a `CapabilityError`. Anthropic takes message-level breakpoints (`cacheControl : { type : 'ephemeral', ttl : '5m' | '1h' }`), OpenAI takes a request-level `promptCacheKey`. Cache reads and writes are reported in `usage.cachedPromptReadTokens` / `cachedPromptWriteTokens` and priced by the spend engine.
+
+<!-- check -->
+```typescript
+import { createModel } from '@webergency-utils/ai';
+
+const claude = createModel( { provider : 'anthropic', model : 'claude-sonnet-4-5' } );
+
+await claude.generate( {
+    messages : [
+        { role : 'system', content : 'Long, stable instructions...', cacheControl : { type : 'ephemeral', ttl : '1h' } },
+        { role : 'user', content : 'Question' }
+    ]
+} );
+
+const gpt = createModel( { provider : 'openai', model : 'gpt-4o-mini' } );
+
+await gpt.generate( { messages : [ { role : 'user', content : 'Question' } ], promptCacheKey : 'support-bot-v3' } );
+```
+
+#### Embeddings
+
+Embedding models are separate objects (`createEmbeddingModel`) for `openai`, `gemini` and `ollama`; other providers throw a `CapabilityError`. `embed()` takes a string or an array and returns one vector per input, in order.
+
+<!-- check -->
+```typescript
+import { createEmbeddingModel } from '@webergency-utils/ai';
+
+const embedder = createEmbeddingModel( { provider : 'openai', model : 'text-embedding-3-small' } );
+const { vectors, usage } = await embedder.embed( [ 'hello world', 'goodbye world' ], { dimensions : 256 } );
+
+console.log( vectors.length, vectors[ 0 ]!.length, usage?.totalTokens );
 ```
 
 ### Storage Subsystem
 
 Abstract interfaces with zero-dependency in-memory / local-disk reference drivers, plus production adapters that take **injected** clients (no new runtime dependencies):
 
+<!-- check -->
 ```typescript
 import { 
     MemoryDocStore, 
@@ -213,6 +385,7 @@ Adapters: `PostgresDocStore` / `PostgresCacheStore`, `SqliteDocStore` / `SqliteC
 
 Extract exact provider-reported metrics and compute costs:
 
+<!-- check -->
 ```typescript
 import { calculateSpend, SpendTracker } from '@webergency-utils/ai';
 
@@ -233,6 +406,7 @@ console.log( spend.totalCost ); // Calculated with exact prompt-caching discount
 
 Keep model pricing continuously up-to-date with event-driven notifications and automatic periodic synchronization:
 
+<!-- check -->
 ```typescript
 import { 
     LocalPricingRegistry, 
@@ -275,6 +449,7 @@ syncService.startAutoSync();
 
 Track operational spend across all dimensions—model inference, storage operations, compute runtime, network transport, MCP calls, and paid tools—with unified budgets, soft warning thresholds, and dynamic unit rate resolution:
 
+<!-- check -->
 ```typescript
 import { 
     SpendTracker, 
@@ -339,6 +514,7 @@ console.log( tracker.categorySpend );
 
 Expose local toolkit tools to Cursor, Claude Desktop, or external MCP clients:
 
+<!-- check -->
 ```typescript
 import { MCPServer, createTool, schema } from '@webergency-utils/ai';
 
@@ -531,6 +707,7 @@ The model must report `capabilities.structuredOutput` (construction throws a `Ca
 
 Build resilient directed acyclic graph workflows with Human-in-the-Loop interrupts:
 
+<!-- check -->
 ```typescript
 import { Workflow, WorkflowRunner, MemoryDocStore } from '@webergency-utils/ai';
 
@@ -701,6 +878,37 @@ const metered = createMeteredModel( model, { tracker, context } );
 #### Manual check against a local collector
 
 Run `docker run --rm -p 4318:4318 -p 16686:16686 -e COLLECTOR_OTLP_ENABLED=true jaegertracing/all-in-one` and point the exporter at the default endpoint; runs appear in Jaeger at `http://localhost:16686`. This is a manual smoke test; automated tests use an injected `fetch`.
+
+## Contributing & Release Checks
+
+```bash
+npm run release:check     # lint, typecheck, build, coverage thresholds, tarball checks, smoke install, publint, attw, README checks
+npm test                  # offline suite, including recorded provider replay
+npm run test:coverage     # v8 coverage with enforced thresholds (see vitest.config.ts)
+npm run smoke:pack        # pack, install into a clean project, import every subpath, compile a TypeScript consumer
+```
+
+CI runs the same scripts. The published tarball contains `dist`, `src` (so source maps resolve), `README.md`, `LICENSE`, `SECURITY.md` and `CHANGELOG.md`, nothing else; `npm run check:pack` enforces that list.
+
+### Recorded provider fixtures
+
+`tests/fixtures/recorded/<provider>/<case>.json` holds scrubbed request/response pairs (streams as chunk lists). `tests/providers/recorded/replay.test.ts` replays them through each adapter's real code path and fails with a body diff when an adapter's request drifts from the recording. A fixture's `source` is `recorded` (captured from the live API) or `synthetic` (hand-authored from the provider's documented wire format until someone records it). Recorded fixtures older than 180 days produce a CI warning.
+
+### Live provider tests
+
+The live suite calls real provider APIs and **costs money** (small token budgets, cheapest default models; override with `AI_LIVE_<PROVIDER>_MODEL`). It never runs in CI or `npm test`.
+
+```bash
+AI_LIVE=1 OPENAI_API_KEY=... npm run test:live              # providers without keys are skipped, with a printed reason
+AI_LIVE=1 AI_LIVE_REQUIRE=openai,anthropic npm run test:live # a listed provider without a key FAILS the run
+npm run record:fixtures -- --provider openai                # re-run live and rewrite that provider's fixtures
+```
+
+Review regenerated fixtures like code before committing: the recorder refuses to write anything that looks like a credential, and a repository test scans every fixture.
+
+### Releasing
+
+See [`docs/release-runbook.md`](docs/release-runbook.md). Publishing is a manual, dry-run-first GitHub workflow.
 
 ## Troubleshooting
 

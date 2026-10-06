@@ -17,6 +17,7 @@ First public release.
 - Provider-agnostic `LanguageModel` contract with adapters for OpenAI, Anthropic, Gemini, Groq, Mistral, DeepSeek and Ollama, built on `fetch` (vendor SDKs are optional peers).
 - Structured output, tool calls, reasoning content, multimodal input, prompt-cache controls and capability flags.
 - Embedding models and vector stores.
+- Decision models (TypeSafe Jev and any structured-output `LanguageModel`) and workflow decision steps.
 - Agent runtime with streaming, guardrails and parallel tool execution; workflow engine.
 - MCP client with HTTP transports, auth and resources.
 - Storage adapters (memory, local disk, S3, Redis, Postgres/pgvector).
