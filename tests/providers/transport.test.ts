@@ -52,10 +52,13 @@ describe( 'BaseProviderAdapter.request transport', () =>
 
     it( 'uses distinct Authorization headers for different apiKeys (AE2)', async () => 
     {
-        vi.mocked( fetch ).mockImplementation( async () => {return jsonResponse( {
-            choices : [ { message : { content : 'ok' }, finish_reason : 'stop' } ],
-            usage   : { prompt_tokens : 1, completion_tokens : 1, total_tokens : 2 }
-        } );} );
+        vi.mocked( fetch ).mockImplementation( async () => 
+        {
+            return jsonResponse( {
+                choices : [ { message : { content : 'ok' }, finish_reason : 'stop' } ],
+                usage   : { prompt_tokens : 1, completion_tokens : 1, total_tokens : 2 }
+            } );
+        } );
 
         const a = new OpenAIProviderAdapter( {
             provider : 'openai',

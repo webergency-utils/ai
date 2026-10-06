@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { Agent, createTool, CheckpointManager } from '../../src/agent/index.js';
 import { schema } from '../../src/core/index.js';
 import { MemoryDocStore } from '../../src/storage/index.js';
@@ -28,7 +28,7 @@ describe( 'Agent run lifecycle (U5)', () =>
                     raw          : {}
                 };
             },
-            async* stream(){ yield* []; }
+            async* stream(){yield* [];}
         };
 
         const agent = new Agent( {
@@ -70,7 +70,7 @@ describe( 'Agent run lifecycle (U5)', () =>
                     raw          : {}
                 };
             },
-            async* stream(){ yield* []; }
+            async* stream(){yield* [];}
         };
 
         const noop = createTool( {
@@ -123,7 +123,7 @@ describe( 'Agent run lifecycle (U5)', () =>
                     raw          : {}
                 };
             },
-            async* stream(){ yield* []; }
+            async* stream(){yield* [];}
         };
 
         const slow = createTool( {
@@ -146,12 +146,12 @@ describe( 'Agent run lifecycle (U5)', () =>
 
         // Simulate a mid-batch process crash: two tools completed, third never ran.
         await checkpoints.saveCheckpoint( {
-            threadId         : 'intr',
-            runId            : 'run_crash',
-            sequence         : 3,
-            stepIndex        : 1,
-            runStepCount     : 1,
-            messages         : [
+            threadId     : 'intr',
+            runId        : 'run_crash',
+            sequence     : 3,
+            stepIndex    : 1,
+            runStepCount : 1,
+            messages     : [
                 { role : 'user', content : 'go' },
                 {
                     role      : 'assistant',
@@ -194,12 +194,12 @@ describe( 'Agent run lifecycle (U5)', () =>
         const checkpoints = new CheckpointManager( store );
 
         await checkpoints.saveCheckpoint( {
-            threadId         : 'ab',
-            runId            : 'r1',
-            sequence         : 1,
-            stepIndex        : 1,
-            runStepCount     : 1,
-            messages         : [
+            threadId     : 'ab',
+            runId        : 'r1',
+            sequence     : 1,
+            stepIndex    : 1,
+            runStepCount : 1,
+            messages     : [
                 { role : 'user', content : 'x' },
                 {
                     role      : 'assistant',
@@ -219,7 +219,7 @@ describe( 'Agent run lifecycle (U5)', () =>
             {
                 return { role : 'assistant', content : 'fresh', finishReason : 'stop', raw : {} };
             },
-            async* stream(){ yield* []; }
+            async* stream(){yield* [];}
         };
 
         const agent = new Agent( { model, checkpointManager : checkpoints } );
@@ -242,7 +242,7 @@ describe( 'Agent run lifecycle (U5)', () =>
             {
                 return { role : 'assistant', content : 'ok', finishReason : 'stop', raw : {} };
             },
-            async* stream(){ yield* []; }
+            async* stream(){yield* [];}
         };
 
         const agent = new Agent( { model } );
@@ -272,7 +272,7 @@ describe( 'Agent run lifecycle (U5)', () =>
                     raw          : {}
                 };
             },
-            async* stream(){ yield* []; }
+            async* stream(){yield* [];}
         };
 
         const block = createTool( {

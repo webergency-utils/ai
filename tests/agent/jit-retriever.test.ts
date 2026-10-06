@@ -17,7 +17,7 @@ describe( 'Tool & JIT Tool Retriever', () =>
                         x : schema.number(),
                         y : schema.number()
                     } ),
-                execute : async ( args: { x : number; y : number } ) => 
+                execute : async ( args: { x : number, y : number } ) => 
                 {
                     return args.x * args.y;
                 }
@@ -42,7 +42,7 @@ describe( 'Tool & JIT Tool Retriever', () =>
                 name        : 'get_weather',
                 description : 'Retrieve current atmospheric temperature and rain forecast',
                 parameters  : { type : 'object', properties : {} },
-                execute     : async () => { return 'Sunny'; }
+                execute     : async () => {return 'Sunny';}
             } );
 
         const databaseTool = new Tool( 
@@ -50,7 +50,7 @@ describe( 'Tool & JIT Tool Retriever', () =>
                 name        : 'query_database',
                 description : 'Execute SQL queries against customer database',
                 parameters  : { type : 'object', properties : {} },
-                execute     : async () => { return []; }
+                execute     : async () => {return [];}
             } );
 
         const calendarTool = new Tool( 
@@ -58,7 +58,7 @@ describe( 'Tool & JIT Tool Retriever', () =>
                 name        : 'schedule_meeting',
                 description : 'Book meetings and check calendar availability',
                 parameters  : { type : 'object', properties : {} },
-                execute     : async () => { return true; }
+                execute     : async () => {return true;}
             } );
 
         retriever.registerTools( [ weatherTool, databaseTool, calendarTool ] );

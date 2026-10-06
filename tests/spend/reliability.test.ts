@@ -234,10 +234,10 @@ describe( 'Pricing identity & spend reliability (U4)', () =>
     {
         const registry = new PricingRegistry();
         registry.register( 'openai:o1-test', {
-            provider             : 'openai',
-            inputPerMillion      : 1,
-            outputPerMillion     : 1,
-            reasoningPerMillion  : 10
+            provider            : 'openai',
+            inputPerMillion     : 1,
+            outputPerMillion    : 1,
+            reasoningPerMillion : 10
         } );
 
         const calc = new SpendCalculator( registry );

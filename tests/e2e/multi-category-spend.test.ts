@@ -11,7 +11,6 @@ import
     type ModelResponse,
     type SpendWarningEvent
 } from '../../src/index.js';
-import { BudgetExceededError } from '../../src/core/error.js';
 
 describe( 'E2E Multi-Category Spend & Telemetry Pipeline', () => 
 {
@@ -212,10 +211,10 @@ describe( 'E2E Multi-Category Spend & Telemetry Pipeline', () =>
             };
 
         const agent = new Agent( {
-            model        : mockModel,
-            tools        : [ paidApiTool ],
-            spendTracker : tracker,
-            maxIterations: 1
+            model         : mockModel,
+            tools         : [ paidApiTool ],
+            spendTracker  : tracker,
+            maxIterations : 1
         } );
 
         const result = await agent.run( 'Execute paid API' );

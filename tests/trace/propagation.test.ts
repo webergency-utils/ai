@@ -147,7 +147,10 @@ describe( 'provider header propagation', () =>
         {
             const walk = ( s: { name: string, id: string, children: any[] } ): void => 
             {
-                s.name === 'model:generate' && spanIds.push( s.id );
+                if( s.name === 'model:generate' )
+                {
+                    spanIds.push( s.id );
+                }
                 s.children.forEach( walk );
             };
 

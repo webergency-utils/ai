@@ -48,118 +48,118 @@ describe( 'Span and Trace Contracts', () =>
     it( 'allows constructing valid typed span and trace models', () => 
     {
         const rollup: SpanRollup = 
-        {
-            totalDurationMs : 150,
-            totalSpendUSD   : 0.005,
-            categorySpend   : {
-                model   : 0.004,
-                storage : 0.001,
-                compute : 0,
-                network : 0,
-                mcp     : 0,
-                tools   : 0,
-                custom  : 0
-            },
-            metrics : {
-                promptTokens     : 100,
-                completionTokens : 50,
-                subcallCount     : 2
-            }
-        };
+            {
+                totalDurationMs : 150,
+                totalSpendUSD   : 0.005,
+                categorySpend   : {
+                    model   : 0.004,
+                    storage : 0.001,
+                    compute : 0,
+                    network : 0,
+                    mcp     : 0,
+                    tools   : 0,
+                    custom  : 0
+                },
+                metrics : {
+                    promptTokens     : 100,
+                    completionTokens : 50,
+                    subcallCount     : 2
+                }
+            };
 
         const span: Span = 
-        {
-            id            : generateSpanId(),
-            traceId       : generateTraceId(),
-            name          : 'agent:step:1',
-            kind          : 'agent',
-            startTime     : Date.now(),
-            endTime       : Date.now() + 150,
-            durationMs    : 150,
-            status        : 'ok',
-            attributes    : { 'step.index' : 1 },
-            metrics       : { promptTokens : 100 },
-            spendUSD      : 0,
-            categorySpend : {
-                model   : 0,
-                storage : 0,
-                compute : 0,
-                network : 0,
-                mcp     : 0,
-                tools   : 0,
-                custom  : 0
-            },
-            children : [],
-            rollup,
-            setAttribute( key, value )
             {
-                this.attributes[key] = value;
-            },
-            setAttributes( attrs )
-            {
-                Object.assign( this.attributes, attrs );
-            },
-            recordMetric( key, value )
-            {
-                this.metrics[key] = ( this.metrics[key] ?? 0 ) + value;
-            },
-            addMetrics( metrics )
-            {
-                for( const [ k, v ] of Object.entries( metrics ) )
+                id            : generateSpanId(),
+                traceId       : generateTraceId(),
+                name          : 'agent:step:1',
+                kind          : 'agent',
+                startTime     : Date.now(),
+                endTime       : Date.now() + 150,
+                durationMs    : 150,
+                status        : 'ok',
+                attributes    : { 'step.index' : 1 },
+                metrics       : { promptTokens : 100 },
+                spendUSD      : 0,
+                categorySpend : {
+                    model   : 0,
+                    storage : 0,
+                    compute : 0,
+                    network : 0,
+                    mcp     : 0,
+                    tools   : 0,
+                    custom  : 0
+                },
+                children : [],
+                rollup,
+                setAttribute( key, value )
                 {
-                    if( v !== undefined )
+                    this.attributes[key] = value;
+                },
+                setAttributes( attrs )
+                {
+                    Object.assign( this.attributes, attrs );
+                },
+                recordMetric( key, value )
+                {
+                    this.metrics[key] = ( this.metrics[key] ?? 0 ) + value;
+                },
+                addMetrics( metrics )
+                {
+                    for( const [ k, v ] of Object.entries( metrics ) )
                     {
-                        this.metrics[k] = ( this.metrics[k] ?? 0 ) + v;
+                        if( v !== undefined )
+                        {
+                            this.metrics[k] = ( this.metrics[k] ?? 0 ) + v;
+                        }
                     }
+                },
+                recordSpend( entry )
+                {
+                    const cost = entry.costUSD ?? 0;
+                    this.spendUSD += cost;
+                    this.categorySpend[entry.category] += cost;
+                },
+                addChild( child )
+                {
+                    this.children.push( child );
+                },
+                end( endTime )
+                {
+                    this.endTime = endTime ?? Date.now();
+                    this.durationMs = this.endTime - this.startTime;
+                },
+                toJSON()
+                {
+                    return {
+                        id            : this.id,
+                        traceId       : this.traceId,
+                        name          : this.name,
+                        kind          : this.kind,
+                        startTime     : this.startTime,
+                        endTime       : this.endTime,
+                        durationMs    : this.durationMs,
+                        status        : this.status,
+                        attributes    : this.attributes,
+                        metrics       : this.metrics,
+                        spendUSD      : this.spendUSD,
+                        categorySpend : this.categorySpend,
+                        children      : this.children.map( ( c ) => {return c.toJSON();} )
+                    } as unknown as SerializedSpan;
                 }
-            },
-            recordSpend( entry )
-            {
-                const cost = entry.costUSD ?? 0;
-                this.spendUSD += cost;
-                this.categorySpend[entry.category] += cost;
-            },
-            addChild( child )
-            {
-                this.children.push( child );
-            },
-            end( endTime )
-            {
-                this.endTime = endTime ?? Date.now();
-                this.durationMs = this.endTime - this.startTime;
-            },
-            toJSON()
-            {
-                return {
-                    id            : this.id,
-                    traceId       : this.traceId,
-                    name          : this.name,
-                    kind          : this.kind,
-                    startTime     : this.startTime,
-                    endTime       : this.endTime,
-                    durationMs    : this.durationMs,
-                    status        : this.status,
-                    attributes    : this.attributes,
-                    metrics       : this.metrics,
-                    spendUSD      : this.spendUSD,
-                    categorySpend : this.categorySpend,
-                    children      : this.children.map( ( c ) => {return c.toJSON();} )
-                } as unknown as SerializedSpan;
-            }
-        };
+            };
 
         const trace: Trace = 
-        {
-            traceId       : span.traceId,
-            threadId      : 'thread_123',
-            agentId       : 'agent_abc',
-            startTime     : span.startTime,
-            endTime       : span.endTime,
-            durationMs    : span.durationMs,
-            rootSpan      : span,
-            totalSpendUSD : span.spendUSD,
-            categorySpend : span.categorySpend
-        };
+            {
+                traceId       : span.traceId,
+                threadId      : 'thread_123',
+                agentId       : 'agent_abc',
+                startTime     : span.startTime,
+                endTime       : span.endTime,
+                durationMs    : span.durationMs,
+                rootSpan      : span,
+                totalSpendUSD : span.spendUSD,
+                categorySpend : span.categorySpend
+            };
 
         expect( span.id ).toHaveLength( 16 );
         expect( trace.traceId ).toHaveLength( 32 );

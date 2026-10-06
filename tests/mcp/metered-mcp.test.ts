@@ -99,7 +99,6 @@ describe( 'Metered MCP Client & Server', () =>
 
     it( 'should allow MCPServer tool handler to receive ExecutionContext', async () => 
     {
-        const [ clientTransport, serverTransport ] = InMemoryTransport.createPair();
         const server = new MCPServer();
         const tracker = new SpendTracker();
 

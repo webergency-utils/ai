@@ -14,11 +14,14 @@ function lastCall(): { body: Record<string, any>, headers: Record<string, string
     return { body : JSON.parse( init.body as string ), headers : init.headers as Record<string, string> };
 }
 
-const anthropicOk = (): Response => {return jsonResponse( {
-    content     : [ { type : 'text', text : 'ok' } ],
-    stop_reason : 'end_turn',
-    usage       : { input_tokens : 10, output_tokens : 2, cache_read_input_tokens : 800, cache_creation_input_tokens : 100 }
-} );};
+const anthropicOk = (): Response => 
+{
+    return jsonResponse( {
+        content     : [ { type : 'text', text : 'ok' } ],
+        stop_reason : 'end_turn',
+        usage       : { input_tokens : 10, output_tokens : 2, cache_read_input_tokens : 800, cache_creation_input_tokens : 100 }
+    } );
+};
 
 describe( 'prompt cache controls', () =>
 {

@@ -100,7 +100,7 @@ describe( 'decision spend and traces (R14)', () =>
 
     it( 'appears in traces as a model span with spend and metrics', async () =>
     {
-        vi.mocked( fetch ).mockResolvedValueOnce( jsonResponse( body( { input_tokens: 2_000_000, output_tokens : 100 } ) ) );
+        vi.mocked( fetch ).mockResolvedValueOnce( jsonResponse( body( { input_tokens : 2_000_000, output_tokens : 100 } ) ) );
 
         const tracker = new SpendTracker();
         const root = new SimpleExecutionContext( { tracker } );

@@ -10,7 +10,7 @@ function lastBody(): Record<string, any>
     return JSON.parse( ( call[ 1 ] as RequestInit ).body as string );
 }
 
-const history = (reasoningContent?: string): ChatMessage[] =>
+const history = ( reasoningContent?: string ): ChatMessage[] =>
 {
     return [
         { role : 'user', content : 'weather in Paris?' },

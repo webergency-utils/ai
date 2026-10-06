@@ -29,25 +29,25 @@ describe( 'Trace Exporters (U6)', () =>
         root.end( root.startTime + 250 );
 
         const trace: Trace = 
-        {
-            traceId       : root.traceId,
-            threadId      : 'thread_123',
-            agentId       : 'agent_abc',
-            startTime     : root.startTime,
-            endTime       : root.endTime,
-            durationMs    : root.durationMs,
-            rootSpan      : root,
-            totalSpendUSD : 0,
-            categorySpend : {
-                model   : 0,
-                storage : 0,
-                compute : 0,
-                network : 0,
-                mcp     : 0,
-                tools   : 0,
-                custom  : 0
-            }
-        };
+            {
+                traceId       : root.traceId,
+                threadId      : 'thread_123',
+                agentId       : 'agent_abc',
+                startTime     : root.startTime,
+                endTime       : root.endTime,
+                durationMs    : root.durationMs,
+                rootSpan      : root,
+                totalSpendUSD : 0,
+                categorySpend : {
+                    model   : 0,
+                    storage : 0,
+                    compute : 0,
+                    network : 0,
+                    mcp     : 0,
+                    tools   : 0,
+                    custom  : 0
+                }
+            };
 
         computeTraceRollup( trace );
         return trace;
@@ -144,15 +144,15 @@ describe( 'Trace Exporters encoding correctness (R11, R12)', () =>
     function traceOf( root: SpanImpl, endTime?: number ): Trace
     {
         const trace: Trace = 
-        {
-            traceId       : root.traceId,
-            startTime     : root.startTime,
-            endTime,
-            durationMs    : endTime === undefined ? undefined : endTime - root.startTime,
-            rootSpan      : root,
-            totalSpendUSD : 0,
-            categorySpend : { model : 0, storage : 0, compute : 0, network : 0, mcp : 0, tools : 0, custom : 0 }
-        };
+            {
+                traceId       : root.traceId,
+                startTime     : root.startTime,
+                endTime,
+                durationMs    : endTime === undefined ? undefined : endTime - root.startTime,
+                rootSpan      : root,
+                totalSpendUSD : 0,
+                categorySpend : { model : 0, storage : 0, compute : 0, network : 0, mcp : 0, tools : 0, custom : 0 }
+            };
 
         computeTraceRollup( trace );
 

@@ -25,7 +25,7 @@ async function main(): Promise<void>
     void [ team, listed, urgency, refund, levels, billingProbability, confidence ];
 
     // @ts-expect-error misspelled label
-    if( answers.team.value === 'bililng' ) { void 0; }
+    if( answers.team.value === 'bililng' ) {void 0;}
 
     // @ts-expect-error a score answer is a number, not a label
     const bad: string = answers.urgency.value;
@@ -50,7 +50,7 @@ new Workflow( 'typed' )
         questions,
         input    : 'x',
         branches : { billing : 'a', technical : 'b' },
-        route    : ( answers: Answers ) => { return answers.team.value === 'billing' ? 'billing' : 'technical'; }
+        route    : ( answers: Answers ) => {return answers.team.value === 'billing' ? 'billing' : 'technical';}
     } )
     .decision( 'inferred', {
         model,
@@ -63,12 +63,12 @@ new Workflow( 'typed' )
 
             return value === 'billing' ? 'billing' : 'technical';
         }
-    })
+    } )
     .decision( 'wrong', {
         model,
         questions,
         input    : 'x',
         branches : { billing : 'a', technical : 'b' },
         // @ts-expect-error 'refund' is not a declared branch
-        route    : () => { return 'refund'; }
+        route    : () => {return 'refund';}
     } );

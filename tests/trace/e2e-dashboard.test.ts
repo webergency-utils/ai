@@ -125,7 +125,7 @@ describe( 'Hierarchical Tracing E2E Dashboard Flow (U7)', () =>
                             role         : 'assistant',
                             content      : 'Fetching intel report 42...',
                             finishReason : 'tool_calls',
-                            toolCalls    : 
+                            toolCalls : 
                             [
                                 {
                                     id        : 'call_1',
@@ -339,7 +339,7 @@ describe( 'Hierarchical Tracing E2E Dashboard Flow (U7)', () =>
                             role         : 'assistant',
                             content      : 'Calling failing tool',
                             finishReason : 'tool_calls',
-                            toolCalls    : 
+                            toolCalls : 
                             [
                                 {
                                     id        : 'c_fail',

@@ -269,7 +269,7 @@ describe( 'createMCPTools (U5)', () =>
 
                 return { role : 'assistant', content : 'done', finishReason : 'stop', raw : {} };
             },
-            async* stream(){ yield* []; }
+            async* stream(){yield* [];}
         };
 
         const agent = new Agent( { model, tools } );
@@ -320,7 +320,7 @@ describe( 'createMCPTools (U5)', () =>
 
                 return { role : 'assistant', content : 'ok', finishReason : 'stop', raw : {} };
             },
-            async* stream(){ yield* []; }
+            async* stream(){yield* [];}
         };
 
         await new Agent( { model, tools } ).run( 'go' );

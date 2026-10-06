@@ -65,7 +65,7 @@ describe( 'GenAI attribute helpers (R7-R10)', () =>
 
         applyModelCallAttributes( span, 
             {
-                provider : 'anthropic', model : 'claude', request : { temperature : 0.2, maxTokens : 512, topP : 0.9 },
+                provider : 'anthropic', model    : 'claude', request  : { temperature : 0.2, maxTokens : 512, topP : 0.9 },
                 response : { finishReason : 'length', usage : { promptTokens : 7, completionTokens : 3, reasoningTokens : 2, cachedPromptReadTokens : 4, cachedPromptWriteTokens : 1 } }
             } );
 
@@ -284,7 +284,7 @@ describe( 'Standalone model telemetry (MeteredModel / embeddings / decisions)', 
         const { rootSpan, context } = collector.startTrace( { name : 'job' } );
         const inner: ModelProtocol = 
             {
-                provider : 'openai', model : 'gpt',
+                provider : 'openai', model    : 'gpt',
                 generate : vi.fn(),
                 stream   : async function* ()
                 {
@@ -294,9 +294,9 @@ describe( 'Standalone model telemetry (MeteredModel / embeddings / decisions)', 
             };
         const model = createMeteredModel( inner, { tracker : new SpendTracker(), context } );
 
-        for await ( const _chunk of model.stream( { messages : [] } ) ){ void _chunk }
+        for await ( const _chunk of model.stream( { messages : [] } ) ){void _chunk;}
 
-        for await ( const _chunk of model.stream( { messages : [] } ) ){ break }
+        for await ( const _chunk of model.stream( { messages : [] } ) ){break;}
 
         const [ done, abandoned ] = rootSpan.children;
 

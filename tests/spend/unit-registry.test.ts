@@ -110,8 +110,8 @@ describe( 'UnitCostRegistry', () =>
         const registry = new UnitCostRegistry();
 
         registry.updateMany( {
-            'custom:api_call'   : 0.02,
-            'custom:batch_job'  : 0.50
+            'custom:api_call'  : 0.02,
+            'custom:batch_job' : 0.50
         } );
 
         expect( registry.get( 'custom:api_call' ) ).toBe( 0.02 );

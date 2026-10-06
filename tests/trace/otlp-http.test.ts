@@ -59,7 +59,7 @@ describe( 'OTLPHttpExporter', () =>
 
         exporter.attach( collector );
 
-        for( let i = 0; i < 40; i++ ){ complete( collector ) }
+        for( let i = 0; i < 40; i++ ){complete( collector );}
 
         await exporter.forceFlush();
 
@@ -227,7 +227,7 @@ describe( 'OTLPHttpExporter', () =>
 
         const ids: string[] = [];
 
-        for( let i = 0; i < 10; i++ ){ ids.push( complete( collector ) ) }
+        for( let i = 0; i < 10; i++ ){ids.push( complete( collector ) );}
 
         await Promise.resolve();
         expect( warnings ).toHaveLength( 1 );
@@ -250,7 +250,7 @@ describe( 'OTLPHttpExporter', () =>
 
         exporter.attach( collector );
 
-        for( let i = 0; i < 12; i++ ){ complete( collector ) }
+        for( let i = 0; i < 12; i++ ){complete( collector );}
 
         expect( exporter.stats.queued ).toBeLessThanOrEqual( 3 );
         expect( exporter.stats.droppedTraces ).toBe( 12 - 2 - 3 );
@@ -262,7 +262,7 @@ describe( 'OTLPHttpExporter', () =>
 
     it( 'aborts a hung request at timeoutMs and retries it', async () => 
     {
-        const { fetch, calls } = fakeFetch( ( n, call ) => 
+        const { fetch, calls } = fakeFetch( ( n ) => 
         {
             if( n === 1 )
             {

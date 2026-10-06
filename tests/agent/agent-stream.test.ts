@@ -57,13 +57,13 @@ const TOOL_TURN = {
         { deltaContent : '', finishReason : 'tool_calls' as const, usage : { promptTokens : 10, completionTokens : 5, totalTokens : 15 } }
     ],
     response : {
-        role         : 'assistant' as const,
-        content      : 'Checking now',
+        role             : 'assistant' as const,
+        content          : 'Checking now',
         reasoningContent : 'thinking',
-        finishReason : 'tool_calls' as const,
-        toolCalls    : [ { id : 'c1', name : 'get_weather', arguments : { city : 'Prague' } } ],
-        usage        : { promptTokens : 10, completionTokens : 5, totalTokens : 15 },
-        raw          : {}
+        finishReason     : 'tool_calls' as const,
+        toolCalls        : [ { id : 'c1', name : 'get_weather', arguments : { city : 'Prague' } } ],
+        usage            : { promptTokens : 10, completionTokens : 5, totalTokens : 15 },
+        raw              : {}
     }
 };
 
@@ -95,7 +95,10 @@ async function collect( events: AsyncIterable<AgentEvent> ): Promise<AgentEvent[
 
 function findSpans( span: Span, name: string, found: Span[] = [] ): Span[]
 {
-    span.name === name && found.push( span );
+    if( span.name === name )
+    {
+        found.push( span );
+    }
     span.children.forEach( ( child ) => {return findSpans( child, name, found );} );
 
     return found;
@@ -198,7 +201,7 @@ describe( 'Agent.runStream (U1)', () =>
 
                 yield { deltaContent : 'one' };
                 yield { deltaContent : 'two' };
-                yield { deltaContent : 'three', finishReason: 'stop' };
+                yield { deltaContent : 'three', finishReason : 'stop' };
             }
         };
         const agent = new Agent( { model, checkpointManager : checkpoints } );
@@ -302,12 +305,12 @@ describe( 'Agent.runStream (U1)', () =>
         const runs: string[] = [];
 
         await checkpoints.saveCheckpoint( {
-            threadId         : 'rs',
-            runId            : 'run_1',
-            sequence         : 2,
-            stepIndex        : 1,
-            runStepCount     : 1,
-            messages         : [
+            threadId     : 'rs',
+            runId        : 'run_1',
+            sequence     : 2,
+            stepIndex    : 1,
+            runStepCount : 1,
+            messages     : [
                 { role : 'user', content : 'go' },
                 { role : 'assistant', content : '', toolCalls : [ { id : 'c1', name : 'get_weather', arguments : { city : 'Prague' } } ] }
             ],
