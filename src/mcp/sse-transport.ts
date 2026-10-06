@@ -3,11 +3,14 @@ import { parseSSEStream } from '../core/stream.js';
 import { authorizedFetch, type MCPAuthOptions } from './auth.js';
 import { readTruncated } from './http-util.js';
 import type { JSONRPCMessage, MCPTransport } from './types.js';
+import { traceparentFromMeta } from '../trace/propagation.js';
 
 export interface SSETransportOptions extends MCPAuthOptions
 {
     /** Custom `fetch` (tests, proxies, custom agents). Defaults to the global one. */
     fetch?             : typeof fetch
+    /** Send a W3C `traceparent` header derived from each message's in-band `_meta` ids. Default false. */
+    propagateTraceContext? : boolean
     /** How long `connect()` waits for the server's `endpoint` event (default 10_000 ms). */
     connectTimeoutMs?  : number
 }
@@ -263,8 +266,14 @@ export class SSETransport implements MCPTransport
             fetch   : this.#fetch,
             url     : this.#postUrl,
             init    : { method : 'POST', body : JSON.stringify( message ), signal : this.#abortController.signal },
-            headers : () => {return { 'content-type' : 'application/json' };},
-            auth    : this.#options
+            headers : () => 
+            {
+                const params = ( message as { params?: { _meta?: unknown } } ).params;
+                const traceparent = this.#options.propagateTraceContext ? traceparentFromMeta( params?._meta ) : undefined;
+
+                return { 'content-type' : 'application/json', ...( traceparent ? { traceparent } : {} ) };
+            },
+            auth : this.#options
         } );
 
         if( !response.ok )

@@ -96,6 +96,8 @@ export type ModelConfig =
         timeoutMs?     : number
         idleTimeoutMs? : number
         maxRetries?    : number
+        /** Send the W3C `traceparent` header (taken from `ModelRequest.traceparent`) to the provider. Default false. */
+        propagateTraceContext? : boolean
         /** Overrides adapter capability defaults (e.g. a local model without schema support). */
         capabilities?  : Partial<Omit<ModelCapabilities, 'multimodal'>> & { multimodal? : Partial<Record<AttachmentType, boolean>> }
     }
@@ -125,6 +127,8 @@ export type ModelRequest =
         /** OpenAI prompt-cache routing key. */
         promptCacheKey? : string
         signal?        : AbortSignal
+        /** W3C `traceparent` of the calling span; only sent when the adapter config enables `propagateTraceContext`. */
+        traceparent?   : string
         timeoutMs?     : number
         idleTimeoutMs? : number
         /** false disables retries; object overrides maxRetries for this call */
