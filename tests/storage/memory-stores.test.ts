@@ -1,149 +1,165 @@
 import { describe, it, expect } from 'vitest';
-import { 
-    MemoryDocStore, 
-    MemoryVectorStore, 
-    MemoryCacheStore, 
-    MemoryFileStore 
-} from '../../src/storage/index.js';
-
-describe( 'In-Memory Storage Reference Drivers', () => 
+import
 {
-    describe( 'MemoryDocStore', () => 
-    {
-        it( 'should support CRUD operations with deep clone isolation', async () => 
-        {
-            const store = new MemoryDocStore();
+    MemoryDocStore,
+    MemoryVectorStore,
+    MemoryCacheStore,
+    MemoryFileStore,
+    StorageInstrument
+} from '../../src/storage/index.js';
+import { SimpleExecutionContext } from '../../src/agent/context.js';
+import { SpendTracker, UnitCostRegistry } from '../../src/spend/index.js';
+import type { Span } from '../../src/trace/types.js';
+import type { CategorySpendInput } from '../../src/spend/types.js';
 
-            const doc = { name : 'Alice', role : 'admin' };
-            await store.set( 'users', 'u1', doc );
-
-            // Mutation on original should not affect store
-            doc.role = 'user';
-
-            const retrieved = await store.get<typeof doc>( 'users', 'u1' );
-            expect( retrieved ).toEqual( { name : 'Alice', role : 'admin' } );
-
-            // Mutation on retrieved should not affect store
-            retrieved!.role = 'superadmin';
-            const retrievedAgain = await store.get<typeof doc>( 'users', 'u1' );
-            expect( retrievedAgain?.role ).toBe( 'admin' );
-
-            expect( await store.count( 'users' ) ).toBe( 1 );
-
-            const list = await store.list( 'users', { role : 'admin' } );
-            expect( list ).toHaveLength( 1 );
-
-            const emptyList = await store.list( 'users', { role : 'nonexistent' } );
-            expect( emptyList ).toHaveLength( 0 );
-
-            const deleted = await store.delete( 'users', 'u1' );
-            expect( deleted ).toBe( true );
-            expect( await store.get( 'users', 'u1' ) ).toBeNull();
-        } );
+function tracedContext(): { ctx: SimpleExecutionContext, spans: Span[], spend: CategorySpendInput[] }
+{
+    const spans: Span[] = [];
+    const spend: CategorySpendInput[] = [];
+    const ctx = new SimpleExecutionContext( {
+        onSpanEnd : ( s ) => {spans.push( s );},
+        onSpend   : ( e ) => {spend.push( e );}
     } );
 
-    describe( 'MemoryVectorStore', () => 
+    return { ctx, spans, spend };
+}
+
+describe( 'Memory store specifics', () =>
+{
+    describe( 'MemoryCacheStore', () =>
     {
-        it( 'should rank nearest vectors by cosine similarity and filter by metadata', async () => 
-        {
-            const store = new MemoryVectorStore();
-
-            await store.upsert( 
-                [
-                    {
-                        id       : 'doc-ortho',
-                        values   : [ 0, 1, 0 ],
-                        content  : 'Orthogonal vector',
-                        metadata : { topic : 'math' }
-                    },
-                    {
-                        id       : 'doc-near',
-                        values   : [ 0.9, 0.1, 0 ],
-                        content  : 'Nearly parallel vector',
-                        metadata : { topic : 'ai' }
-                    },
-                    {
-                        id       : 'doc-exact',
-                        values   : [ 1, 0, 0 ],
-                        content  : 'Exact match vector',
-                        metadata : { topic : 'ai' }
-                    }
-                ] );
-
-            expect( await store.count() ).toBe( 3 );
-
-            // Query with [1, 0, 0]
-            const queryVec = [ 1, 0, 0 ];
-            const results = await store.query( queryVec, 2 );
-
-            expect( results ).toHaveLength( 2 );
-            expect( results[0].id ).toBe( 'doc-exact' );
-            expect( results[0].score ).toBeCloseTo( 1.0, 4 );
-            expect( results[1].id ).toBe( 'doc-near' );
-            expect( results[1].score ).toBeGreaterThan( 0.9 );
-
-            // Query with filter
-            const filteredResults = await store.query( queryVec, 5, { topic : 'math' } );
-            expect( filteredResults ).toHaveLength( 1 );
-            expect( filteredResults[0].id ).toBe( 'doc-ortho' );
-
-            await store.delete( [ 'doc-exact' ] );
-            expect( await store.count() ).toBe( 2 );
-        } );
-    } );
-
-    describe( 'MemoryCacheStore', () => 
-    {
-        it( 'should respect TTL expiration and LRU capacity pruning', async () => 
+        it( 'evicts the least recently used entry beyond maxEntries', async () =>
         {
             const store = new MemoryCacheStore( { maxEntries : 2 } );
 
             await store.set( 'k1', 'val1' );
             await store.set( 'k2', 'val2' );
-
-            expect( await store.get( 'k1' ) ).toBe( 'val1' );
-            expect( await store.has( 'k2' ) ).toBe( true );
-
-            // Touch k1 to make k2 the oldest LRU
             await store.get( 'k1' );
-
-            // Insert k3 which should evict oldest (k2)
             await store.set( 'k3', 'val3' );
 
             expect( await store.has( 'k2' ) ).toBe( false );
             expect( await store.get( 'k1' ) ).toBe( 'val1' );
             expect( await store.get( 'k3' ) ).toBe( 'val3' );
+        } );
 
-            // TTL expiration test with 0 second TTL (immediate expiry)
-            await store.set( 'temp', 'data', -1 );
-            expect( await store.get( 'temp' ) ).toBeNull();
-            expect( await store.has( 'temp' ) ).toBe( false );
+        it( 'applies defaultTTLSeconds', async () =>
+        {
+            const store = new MemoryCacheStore( { defaultTTLSeconds : -1 } );
+
+            await store.set( 'k', 'v' );
+            expect( await store.get( 'k' ) ).toBeNull();
         } );
     } );
 
-    describe( 'MemoryFileStore', () => 
+    describe( 'MemoryVectorStore', () =>
     {
-        it( 'should write, read, stream, and check existence', async () => 
+        it( 'locks dimensions on first write when none is configured', async () =>
         {
-            const store = new MemoryFileStore();
+            const store = new MemoryVectorStore();
 
-            const meta = await store.write( 'uploads/hello.txt', 'Hello Storage World' );
-            expect( meta.path ).toBe( 'uploads/hello.txt' );
-            expect( meta.size ).toBe( 19 );
-            expect( await store.exists( 'uploads/hello.txt' ) ).toBe( true );
+            expect( store.dimensions ).toBeUndefined();
+            await store.upsert( [ { id : 'a', values : [ 1, 0 ] } ] );
+            expect( store.dimensions ).toBe( 2 );
+            await expect( store.upsert( [ { id : 'b', values : [ 1, 0, 0 ] } ] ) ).rejects.toThrow( /dimension/i );
 
-            const data = await store.read( 'uploads/hello.txt' );
-            expect( data ).toBeDefined();
-            expect( new TextDecoder().decode( data! ) ).toBe( 'Hello Storage World' );
+            await store.clear();
+            expect( store.dimensions ).toBeUndefined();
+        } );
 
-            const stream = await store.readStream( 'uploads/hello.txt' );
-            expect( stream ).toBeDefined();
-            const reader = stream!.getReader();
-            const chunk = await reader.read();
-            expect( new TextDecoder().decode( chunk.value ) ).toBe( 'Hello Storage World' );
+        it( 'does not lock dimensions when the first batch is rejected', async () =>
+        {
+            const store = new MemoryVectorStore();
 
-            expect( await store.delete( 'uploads/hello.txt' ) ).toBe( true );
-            expect( await store.exists( 'uploads/hello.txt' ) ).toBe( false );
+            await expect(
+                store.upsert( [ { id : 'a', values : [ 1, 0 ] }, { id : 'b', values : [ 1, 0, 0 ] } ] )
+            ).rejects.toThrow( /dimension/i );
+            expect( await store.count() ).toBe( 0 );
+        } );
+    } );
+
+    describe( 'instrumentation', () =>
+    {
+        it( 'emits storage:<kind>:<op> spans with attributes and routes spend to the child context', async () =>
+        {
+            const { ctx, spans, spend } = tracedContext();
+            const docs = new MemoryDocStore();
+            const cache = new MemoryCacheStore();
+            const vectors = new MemoryVectorStore();
+            const files = new MemoryFileStore();
+
+            await docs.set( 'c', 'id1', { a : 1 }, { context : ctx } );
+            await docs.getWithMeta( 'c', 'id1', { context : ctx } );
+            await docs.conditionalWrite( 'c', 'id2', { a : 1 }, { context : ctx, expectedVersion : null } );
+            await docs.list( 'c', undefined, { context : ctx } );
+            await docs.delete( 'c', 'id1', { context : ctx } );
+            await cache.set( 'k', 1, undefined, { context : ctx } );
+            await cache.get( 'k', { context : ctx } );
+            await cache.delete( 'k', { context : ctx } );
+            await vectors.upsert( [ { id : 'v', values : [ 1, 0 ] } ], { context : ctx } );
+            await vectors.query( [ 1, 0 ], { topK : 1, context : ctx } );
+            await vectors.delete( [ 'v' ], { context : ctx } );
+            await files.write( 'f.txt', 'x', { context : ctx } );
+            await files.read( 'f.txt', { context : ctx } );
+            await files.delete( 'f.txt', { context : ctx } );
+
+            expect( spans.map( ( s ) => {return s.name;} ) ).toEqual( [
+                'storage:doc:set',
+                'storage:doc:get',
+                'storage:doc:conditionalWrite',
+                'storage:doc:list',
+                'storage:doc:delete',
+                'storage:cache:set',
+                'storage:cache:get',
+                'storage:cache:delete',
+                'storage:vector:upsert',
+                'storage:vector:query',
+                'storage:vector:delete',
+                'storage:file:write',
+                'storage:file:read',
+                'storage:file:delete'
+            ] );
+            expect( spans[0].kind ).toBe( 'storage' );
+            expect( spans[0].attributes['storage.collection'] ).toBe( 'c' );
+            expect( spans[0].attributes['storage.id'] ).toBe( 'id1' );
+            expect( spend.length ).toBeGreaterThanOrEqual( 14 );
+            expect( spend.every( ( e ) => {return e.category === 'storage';} ) ).toBe( true );
+        } );
+
+        it( 'does not report spend for failed conditional writes', async () =>
+        {
+            const { ctx, spend } = tracedContext();
+            const docs = new MemoryDocStore();
+
+            await docs.set( 'c', 'id', { a : 1 } );
+            await docs.conditionalWrite( 'c', 'id', { a : 2 }, { context : ctx, expectedVersion : null } );
+
+            expect( spend ).toHaveLength( 0 );
+        } );
+
+        it( 'falls back to the store tracker without a context', async () =>
+        {
+            const tracker = new SpendTracker();
+            const pricing = new UnitCostRegistry();
+
+            pricing.register( 'storage:doc_write', 0.5 );
+
+            const docs = new MemoryDocStore( { tracker, storagePricing : pricing } );
+
+            await docs.set( 'c', 'id', { a : 1 } );
+
+            expect( tracker.getCategorySpend( 'storage' ) ).toBeCloseTo( 0.5, 6 );
+        } );
+
+        it( 'StorageInstrument.run passes the caller context through when it cannot create spans', async () =>
+        {
+            const instrument = new StorageInstrument( 'doc' );
+            const seen: unknown[] = [];
+            const ctx = { reportSpend : () => {return;} } as unknown as SimpleExecutionContext;
+
+            await instrument.run( 'op', ctx, undefined, async ( c ) => {seen.push( c );} );
+            await instrument.run( 'op', undefined, undefined, async ( c ) => {seen.push( c );} );
+
+            expect( seen ).toEqual( [ ctx, undefined ] );
         } );
     } );
 } );

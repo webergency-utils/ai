@@ -1,7 +1,8 @@
 import type { ExecutionContext } from '../agent/context.js';
 import type { SpendTracker } from '../spend/tracker.js';
 import type { UnitCostRegistry } from '../spend/unit-registry.js';
-import type { CategorySpendInput } from '../spend/types.js';
+import { StorageInstrument } from './instrument.js';
+import { assertJsonSafe, assertScalarFilter } from './json.js';
 
 export interface DocStoreOperationOptions
 {
@@ -54,14 +55,12 @@ interface VersionedDoc
 
 export class MemoryDocStore implements IDocumentStore
 {
-    readonly #collections     = new Map<string, Map<string, VersionedDoc>>();
-    readonly #tracker?        : SpendTracker;
-    readonly #storagePricing? : UnitCostRegistry;
+    readonly #collections = new Map<string, Map<string, VersionedDoc>>();
+    readonly #instrument  : StorageInstrument;
 
     constructor( options: MemoryDocStoreOptions = {} )
     {
-        this.#tracker = options.tracker;
-        this.#storagePricing = options.storagePricing;
+        this.#instrument = new StorageInstrument( 'doc', options );
     }
 
     public async get<T = Record<string, unknown>>( collection: string, id: string, options?: DocStoreOperationOptions ): Promise<T | null>
@@ -71,263 +70,102 @@ export class MemoryDocStore implements IDocumentStore
         return meta ? meta.doc : null;
     }
 
-    public async getWithMeta<T = Record<string, unknown>>( 
-        collection: string, 
-        id: string, 
-        options?: DocStoreOperationOptions 
+    public async getWithMeta<T = Record<string, unknown>>(
+        collection: string,
+        id: string,
+        options?: DocStoreOperationOptions
     ): Promise<{ doc: T, version: number } | null>
     {
-        const execute = async ( ctx?: ExecutionContext ): Promise<{ doc: T, version: number } | null> => 
+        return this.#instrument.run( 'get', options?.context, { collection, id }, async ( ctx ) =>
         {
-            this.#reportSpend( {
-                category    : 'storage',
-                subcategory : 'doc_read',
-                units       : 1,
-                unitType    : 'operations'
-            }, ctx ?? options?.context );
+            this.#instrument.spend( 'doc_read', 1, 'operations', ctx );
 
-            const col = this.#collections.get( collection );
+            const entry = this.#collections.get( collection )?.get( id );
 
-            if( !col )
-            {
-                return null;
-            }
-
-            const entry = col.get( id );
-
-            if( !entry )
-            {
-                return null;
-            }
-
-            return {
-                doc     : structuredClone( entry.doc ) as T,
-                version : entry.version
-            };
-        };
-
-        if( options?.context?.withSpan )
-        {
-            return options.context.withSpan( 
-                'storage:doc:get', 
-                async ( span, childCtx ) => 
-                {
-                    span.setAttribute( 'storage.collection', collection );
-                    span.setAttribute( 'storage.id', id );
-                    return execute( childCtx );
-                }, 
-                { kind : 'storage' } 
-            );
-        }
-
-        return execute();
+            return entry ? { doc : structuredClone( entry.doc ) as T, version : entry.version } : null;
+        } );
     }
 
     public async set<T = Record<string, unknown>>( collection: string, id: string, doc: T, options?: DocStoreOperationOptions ): Promise<void>
     {
-        const execute = async ( ctx?: ExecutionContext ): Promise<void> => 
+        assertJsonSafe( doc, 'doc' );
+
+        return this.#instrument.run( 'set', options?.context, { collection, id }, async ( ctx ) =>
         {
-            let col = this.#collections.get( collection );
-
-            if( !col )
-            {
-                col = new Map<string, VersionedDoc>();
-                this.#collections.set( collection, col );
-            }
-
+            const col = this.#collection( collection );
             const prev = col.get( id );
-            const version = prev ? prev.version + 1 : 1;
-            col.set( id, { doc : structuredClone( doc ), version } );
 
-            this.#reportSpend( {
-                category    : 'storage',
-                subcategory : 'doc_write',
-                units       : 1,
-                unitType    : 'operations'
-            }, ctx ?? options?.context );
-        };
-
-        if( options?.context?.withSpan )
-        {
-            return options.context.withSpan( 
-                'storage:doc:set', 
-                async ( span, childCtx ) => 
-                {
-                    span.setAttribute( 'storage.collection', collection );
-                    span.setAttribute( 'storage.id', id );
-                    return execute( childCtx );
-                }, 
-                { kind : 'storage' } 
-            );
-        }
-
-        return execute();
+            col.set( id, { doc : structuredClone( doc ), version : prev ? prev.version + 1 : 1 } );
+            this.#instrument.spend( 'doc_write', 1, 'operations', ctx );
+        } );
     }
 
-    public async conditionalWrite<T = Record<string, unknown>>( 
-        collection: string, 
-        id: string, 
-        doc: T, 
-        options: DocStoreOperationOptions & { expectedVersion: number | null } 
+    public async conditionalWrite<T = Record<string, unknown>>(
+        collection: string,
+        id: string,
+        doc: T,
+        options: DocStoreOperationOptions & { expectedVersion: number | null }
     ): Promise<ConditionalWriteResult>
     {
-        const execute = async ( ctx?: ExecutionContext ): Promise<ConditionalWriteResult> => 
+        assertJsonSafe( doc, 'doc' );
+
+        return this.#instrument.run( 'conditionalWrite', options.context, { collection, id }, async ( ctx ) =>
         {
-            let col = this.#collections.get( collection );
-
-            if( !col )
-            {
-                col = new Map<string, VersionedDoc>();
-                this.#collections.set( collection, col );
-            }
-
+            const col = this.#collection( collection );
             const current = col.get( id );
             const expected = options.expectedVersion;
 
-            if( expected === null )
-            {
-                if( current )
-                {
-                    return { written : false, version : current.version };
-                }
-
-                col.set( id, { doc : structuredClone( doc ), version : 1 } );
-                this.#reportSpend( {
-                    category    : 'storage',
-                    subcategory : 'doc_write',
-                    units       : 1,
-                    unitType    : 'operations'
-                }, ctx ?? options.context );
-
-                return { written : true, version : 1 };
-            }
-
-            if( !current || current.version !== expected )
+            if( expected === null ? current : ( !current || current.version !== expected ) )
             {
                 return { written : false, version : current?.version ?? 0 };
             }
 
-            const nextVersion = current.version + 1;
-            col.set( id, { doc : structuredClone( doc ), version : nextVersion } );
-            this.#reportSpend( {
-                category    : 'storage',
-                subcategory : 'doc_write',
-                units       : 1,
-                unitType    : 'operations'
-            }, ctx ?? options.context );
+            const version = ( current?.version ?? 0 ) + 1;
 
-            return { written : true, version : nextVersion };
-        };
+            col.set( id, { doc : structuredClone( doc ), version } );
+            this.#instrument.spend( 'doc_write', 1, 'operations', ctx );
 
-        if( options.context?.withSpan )
-        {
-            return options.context.withSpan( 
-                'storage:doc:conditionalWrite', 
-                async ( span, childCtx ) => 
-                {
-                    span.setAttribute( 'storage.collection', collection );
-                    span.setAttribute( 'storage.id', id );
-                    return execute( childCtx );
-                }, 
-                { kind : 'storage' } 
-            );
-        }
-
-        return execute();
+            return { written : true, version };
+        } );
     }
 
     public async delete( collection: string, id: string, options?: DocStoreOperationOptions ): Promise<boolean>
     {
-        const execute = async ( ctx?: ExecutionContext ): Promise<boolean> => 
+        return this.#instrument.run( 'delete', options?.context, { collection, id }, async ( ctx ) =>
         {
-            this.#reportSpend( {
-                category    : 'storage',
-                subcategory : 'doc_write',
-                units       : 1,
-                unitType    : 'operations'
-            }, ctx ?? options?.context );
+            this.#instrument.spend( 'doc_write', 1, 'operations', ctx );
 
-            const col = this.#collections.get( collection );
-
-            if( !col )
-            {
-                return false;
-            }
-
-            return col.delete( id );
-        };
-
-        if( options?.context?.withSpan )
-        {
-            return options.context.withSpan( 
-                'storage:doc:delete', 
-                async ( span, childCtx ) => 
-                {
-                    span.setAttribute( 'storage.collection', collection );
-                    span.setAttribute( 'storage.id', id );
-                    return execute( childCtx );
-                }, 
-                { kind : 'storage' } 
-            );
-        }
-
-        return execute();
+            return this.#collections.get( collection )?.delete( id ) ?? false;
+        } );
     }
 
     public async list<T = Record<string, unknown>>( collection: string, filter?: Record<string, unknown>, options?: DocStoreOperationOptions ): Promise<T[]>
     {
-        const execute = async ( ctx?: ExecutionContext ): Promise<T[]> => 
+        assertScalarFilter( filter );
+
+        return this.#instrument.run( 'list', options?.context, { collection }, async ( ctx ) =>
         {
-            this.#reportSpend( {
-                category    : 'storage',
-                subcategory : 'doc_read',
-                units       : 1,
-                unitType    : 'operations'
-            }, ctx ?? options?.context );
-
-            const col = this.#collections.get( collection );
-
-            if( !col )
-            {
-                return [];
-            }
+            this.#instrument.spend( 'doc_read', 1, 'operations', ctx );
 
             const results: T[] = [];
 
-            for( const entry of col.values() )
+            for( const entry of this.#collections.get( collection )?.values() ?? [] )
             {
                 const cloned = structuredClone( entry.doc ) as Record<string, unknown>;
 
-                if( this.matchesFilter( cloned, filter ) )
+                if( this.#matchesFilter( cloned, filter ) )
                 {
                     results.push( cloned as T );
                 }
             }
 
             return results;
-        };
-
-        if( options?.context?.withSpan )
-        {
-            return options.context.withSpan( 
-                'storage:doc:list', 
-                async ( span, childCtx ) => 
-                {
-                    span.setAttribute( 'storage.collection', collection );
-                    return execute( childCtx );
-                }, 
-                { kind : 'storage' } 
-            );
-        }
-
-        return execute();
+        } );
     }
 
     public async count( collection: string ): Promise<number>
     {
-        const col = this.#collections.get( collection );
-
-        return col ? col.size : 0;
+        return this.#collections.get( collection )?.size ?? 0;
     }
 
     public async clear( collection?: string ): Promise<void>
@@ -342,41 +180,26 @@ export class MemoryDocStore implements IDocumentStore
         }
     }
 
-    #reportSpend( entry: CategorySpendInput, context?: ExecutionContext ): void
+    #collection( name: string ): Map<string, VersionedDoc>
     {
-        if( this.#storagePricing && entry.costUSD === undefined )
-        {
-            const resolved = this.#storagePricing.resolveCost( entry );
+        let col = this.#collections.get( name );
 
-            if( resolved > 0 )
-            {
-                entry.costUSD = resolved;
-            }
+        if( !col )
+        {
+            col = new Map<string, VersionedDoc>();
+            this.#collections.set( name, col );
         }
 
-        if( context )
-        {
-            context.reportSpend( entry );
-        }
-        else if( this.#tracker )
-        {
-            this.#tracker.recordCategorySpend( entry );
-        }
+        return col;
     }
 
-    private matchesFilter( doc: Record<string, unknown>, filter?: Record<string, unknown> ): boolean
+    #matchesFilter( doc: Record<string, unknown>, filter?: Record<string, unknown> ): boolean
     {
-        if( !filter )
-        {
-            return true;
-        }
+        if( !filter ){return true;}
 
         for( const [ k, v ] of Object.entries( filter ) )
         {
-            if( doc[k] !== v )
-            {
-                return false;
-            }
+            if( doc[k] !== v ){return false;}
         }
 
         return true;
