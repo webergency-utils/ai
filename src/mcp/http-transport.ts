@@ -3,11 +3,17 @@ import { parseSSEStream } from '../core/stream.js';
 import { authorizedFetch, type MCPAuthOptions } from './auth.js';
 import { MAX_ERROR_BODY_CHARS, readTruncated } from './http-util.js';
 import type { JSONRPCMessage, JSONRPCResponse, MCPTransport } from './types.js';
+import { traceparentFromMeta } from '../trace/propagation.js';
 
 export interface StreamableHTTPTransportOptions extends MCPAuthOptions
 {
     /** Custom `fetch` (tests, proxies, custom agents). Defaults to the global one. */
     fetch?          : typeof fetch
+    /**
+     * Send a W3C `traceparent` header derived from each message's in-band `_meta` (`traceId` + `parentSpanId`).
+     * Default false; the `_meta` ids are always sent regardless.
+     */
+    propagateTraceContext? : boolean
     /** Open a GET stream for server-initiated messages once the session is initialized (default false). */
     listen?         : boolean
     /** Upper bound for the best-effort session `DELETE` sent by `close()` (default 5000 ms). */
@@ -96,7 +102,7 @@ export class StreamableHTTPTransport implements MCPTransport
         this.#errorHandler = handler;
     }
 
-    /** Protocol headers for every request. `traceparent` injection will hook in here (Area 7); nothing yet. */
+    /** Protocol headers for every request. */
     #headers( extra: Record<string, string> = {} ): Record<string, string>
     {
         const headers: Record<string, string> = { ...extra };
@@ -112,6 +118,20 @@ export class StreamableHTTPTransport implements MCPTransport
         }
 
         return headers;
+    }
+
+    /** `traceparent` from the message's `_meta` ids, only when `propagateTraceContext` is on. */
+    #traceHeaders( message: JSONRPCMessage ): Record<string, string>
+    {
+        if( !this.#options.propagateTraceContext )
+        {
+            return {};
+        }
+
+        const params = ( message as { params?: { _meta?: unknown } } ).params;
+        const traceparent = traceparentFromMeta( params?._meta );
+
+        return traceparent ? { traceparent } : {};
     }
 
     #fetchAuthorized( init: Omit<RequestInit, 'headers'>, extra: Record<string, string> ): Promise<Response>
@@ -260,7 +280,11 @@ export class StreamableHTTPTransport implements MCPTransport
 
         const response = await this.#fetchAuthorized( 
             { method : 'POST', body : JSON.stringify( message ), signal }, 
-            { 'content-type' : 'application/json', accept : 'application/json, text/event-stream' } 
+            { 
+                'content-type' : 'application/json', 
+                accept         : 'application/json, text/event-stream',
+                ...this.#traceHeaders( message )
+            } 
         );
 
         if( !response.ok )

@@ -2,6 +2,7 @@ import type { DecisionModel, DecisionQuestions, DecisionRequest, DecisionRespons
 import type { SpendTracker } from '../spend/tracker.js';
 import { createMeteredDecisionModel } from '../providers/metered.js';
 import type { ExecutionContext } from './context.js';
+import { applyModelCallAttributes } from '../trace/genai.js';
 
 export interface TracedDecisionOptions
 {
@@ -27,8 +28,7 @@ export async function decideWithContext<Q extends DecisionQuestions>(
         options.name ?? 'model:decide', 
         async ( span ) => 
         {
-            span.setAttribute( 'model.provider', model.provider );
-            span.setAttribute( 'model.name', model.model );
+            applyModelCallAttributes( span, { provider : model.provider, model : model.model } );
             span.setAttributes( options.attributes ?? {} );
             span.setAttribute( 'decision.questions', Object.keys( request.questions ).length );
 
@@ -43,6 +43,8 @@ export async function decideWithContext<Q extends DecisionQuestions>(
             const response = await metered.decide( request );
 
             span.setAttribute( 'decision.calibrated', response.calibrated );
+
+            applyModelCallAttributes( span, { provider : model.provider, model : model.model, response : { usage : response.usage } } );
 
             if( response.usage )
             {
