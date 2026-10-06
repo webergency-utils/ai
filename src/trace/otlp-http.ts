@@ -2,6 +2,8 @@ import { AIError } from '../core/error.js';
 import type { Trace, TraceWarningEvent } from './types.js';
 import type { TraceCollector } from './collector.js';
 import { exportTracesToOTLP, type OTLPExportOptions } from './exporter.js';
+import { assertCaptureConfig, type ContentCaptureOptions } from './genai.js';
+import { assertSamplingOptions, createSampler, type TraceSamplingOptions } from './sampling.js';
 
 export const DEFAULT_OTLP_ENDPOINT = 'http://localhost:4318/v1/traces';
 
@@ -10,7 +12,7 @@ const RETRYABLE_STATUS = new Set( [ 408, 429, 502, 503, 504 ] );
 
 export type OTLPFetch = ( url: string, init: { method: string, headers: Record<string, string>, body: string, signal: AbortSignal } ) => Promise<Pick<Response, 'ok' | 'status' | 'headers' | 'text'>>;
 
-export interface OTLPHttpExporterOptions
+export interface OTLPHttpExporterOptions extends ContentCaptureOptions, TraceSamplingOptions
 {
     /** Full traces URL. Default `http://localhost:4318/v1/traces`. */
     endpoint?            : string
@@ -57,6 +59,8 @@ export interface OTLPHttpExporterStats
     failedTraces    : number
     failedBatches   : number
     droppedTraces   : number
+    /** Traces skipped by `sampler` / `sampleRate`. */
+    sampledOut      : number
     retries         : number
 }
 
@@ -154,9 +158,10 @@ export class OTLPHttpExporter
     readonly #now                 : () => number;
     readonly #onError?            : ( event: TraceWarningEvent ) => void;
     readonly #encodeOptions       : OTLPExportOptions;
+    readonly #sample              : ( trace: Trace ) => boolean;
     readonly #collectors          = new Map<TraceCollector, () => void>();
     readonly #abort               = new AbortController();
-    readonly #stats               = { exportedTraces : 0, exportedBatches : 0, failedTraces : 0, failedBatches : 0, droppedTraces : 0, retries : 0 };
+    readonly #stats               = { exportedTraces : 0, exportedBatches : 0, failedTraces : 0, failedBatches : 0, droppedTraces : 0, sampledOut : 0, retries : 0 };
 
     #queue: Array<{ trace: Trace, collector?: TraceCollector }> = [];
     #timer?: ReturnType<typeof setTimeout>;
@@ -167,6 +172,9 @@ export class OTLPHttpExporter
 
     constructor( options: OTLPHttpExporterOptions = {} )
     {
+        assertCaptureConfig( options, 'OTLPHttpExporter' );
+        assertSamplingOptions( options, 'OTLPHttpExporter' );
+
         this.#endpoint = options.endpoint ?? DEFAULT_OTLP_ENDPOINT;
         this.#headers = { ...( options.headers ?? {} ) };
         this.#timeoutMs = positive( 'timeoutMs', options.timeoutMs, 10_000 );
@@ -180,6 +188,14 @@ export class OTLPHttpExporter
         this.#sleep = options.sleep ?? defaultSleep;
         this.#now = options.now ?? Date.now;
         this.#onError = options.onError;
+        this.#sample = createSampler( options, ( error ) => 
+        {
+            this.#emit( 
+                {
+                    code    : 'TRACE_SAMPLER_FAILED',
+                    message : `Custom sampler threw; keeping the trace: ${error instanceof Error ? error.message : String( error )}`
+                } );
+        } );
 
         const fetchImpl = options.fetch ?? ( globalThis.fetch ? globalThis.fetch.bind( globalThis ) as unknown as OTLPFetch : undefined );
 
@@ -196,6 +212,9 @@ export class OTLPHttpExporter
                 resourceAttributes : options.resourceAttributes,
                 spanNameStyle      : options.spanNameStyle,
                 genaiCompat        : options.genaiCompat,
+                captureContent     : options.captureContent,
+                redact             : options.redact,
+                maxContentBytes    : options.maxContentBytes,
                 now                : this.#now
             };
     }
@@ -315,6 +334,13 @@ export class OTLPHttpExporter
     {
         if( this.#shutdown )
         {
+            return;
+        }
+
+        if( !this.#sample( trace ) )
+        {
+            this.#stats.sampledOut++;
+
             return;
         }
 

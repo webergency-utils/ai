@@ -5,7 +5,7 @@ import type { EmbeddingOptions, EmbeddingProtocol, EmbeddingResponse } from '../
 import type { SpendTracker } from '../spend/tracker.js';
 import type { Span } from '../trace/types.js';
 import type { ExecutionContext } from '../agent/context.js';
-import { applyModelCallAttributes } from '../trace/genai.js';
+import { applyModelCallAttributes, captureContent, GENAI_ATTR } from '../trace/genai.js';
 
 export interface MeteredModelOptions
 {
@@ -147,6 +147,7 @@ export class MeteredModel implements LanguageModel
 
             this.#recordResponse( response, call.span );
             this.#tagResponse( call.span, request, response.finishReason, response.usage );
+            this.#captureOutput( call.span, response.content, response.toolCalls, response.finishReason );
             await call.close();
 
             return response;
@@ -166,6 +167,8 @@ export class MeteredModel implements LanguageModel
         let usage: ModelResponse['usage'];
         let finishReason: string | undefined;
         let sawChunk = false;
+        let text = '';
+        const capturing = !this.#getSpan && this.#context?.capture?.captureContent === true;
         const call = await openCallSpan( 'model:stream', this.#getSpan, this.#context );
         let failure: unknown;
 
@@ -185,6 +188,11 @@ export class MeteredModel implements LanguageModel
                     }
 
                     finishReason = chunk.finishReason ?? finishReason;
+
+                    if( capturing )
+                    {
+                        text += chunk.deltaContent;
+                    }
 
                     yield chunk;
                 }
@@ -206,6 +214,7 @@ export class MeteredModel implements LanguageModel
             }
 
             this.#tagResponse( call.span, request, finishReason, usage );
+            this.#captureOutput( call.span, text, undefined, finishReason );
 
             if( usage )
             {
@@ -227,10 +236,25 @@ export class MeteredModel implements LanguageModel
         }
     }
 
+    #captureOutput( span: Span | undefined, content: string, toolCalls: ModelResponse['toolCalls'], finishReason: string | undefined ): void
+    {
+        if( span && !this.#getSpan )
+        {
+            captureContent( span, this.#context?.capture, GENAI_ATTR.OUTPUT_MESSAGES, [ { role : 'assistant', content, toolCalls } ], finishReason );
+        }
+    }
+
     #tagRequest( span: Span | undefined, request: ModelRequest ): void
     {
         if( span )
         {
+            // Only spans this wrapper owns capture content; an `Agent` span captures for itself.
+            if( !this.#getSpan )
+            {
+                captureContent( span, this.#context?.capture, GENAI_ATTR.INPUT_MESSAGES, 
+                    request.systemPrompt ? [ { role : 'system', content : request.systemPrompt }, ...request.messages ] : request.messages );
+            }
+
             applyModelCallAttributes( span, 
                 {
                     provider : this.provider,

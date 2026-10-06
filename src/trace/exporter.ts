@@ -6,7 +6,12 @@ import type {
     SerializedTrace,
     TraceWarningEvent
 } from './types.js';
-import { GENAI_ATTR, projectGenAIAttributes, toGenAISpanName, type GenAICompat } from './genai.js';
+import 
+{ 
+    CONTENT_ATTRIBUTE_KEYS, DEFAULT_MAX_CONTENT_BYTES, GENAI_ATTR, assertCaptureConfig, isSecretAttributeKey, projectGenAIAttributes, 
+    scrubSecrets, toGenAISpanName, truncateContent, type ContentCaptureOptions, type GenAICompat 
+} 
+    from './genai.js';
 
 export interface OTLPAnyValue
 {
@@ -76,13 +81,13 @@ export interface OTLPExportTraceServiceRequest
     resourceSpans : OTLPResourceSpans[]
 }
 
-export interface OTLPExportOptions
+export interface OTLPExportOptions extends ContentCaptureOptions
 {
     serviceName?        : string
     serviceVersion?     : string
     /** Extra resource attributes; `service.name` / `service.version` always come from the dedicated options. */
     resourceAttributes? : Record<string, SpanAttributeValue>
-    /** Receives encoding warnings (`TRACE_ATTRIBUTE_INVALID`). Without it they are dropped. */
+    /** Receives encoding warnings (`TRACE_ATTRIBUTE_INVALID`, `TRACE_ATTRIBUTE_DROPPED`, `TRACE_REDACT_FAILED`). Without it they are dropped. */
     onWarning?          : ( event: TraceWarningEvent ) => void
     /** Clock used to close unfinished spans; defaults to the trace end time, then `Date.now()`. */
     now?                : () => number
@@ -151,7 +156,7 @@ interface EncodeContext
     traceId : string
     now     : number
     options : OTLPExportOptions
-    warn    : ( spanName: string, key: string, value: unknown ) => void
+    warn    : ( code: string, spanName: string, key: string, value: unknown ) => void
 }
 
 /**
@@ -217,12 +222,37 @@ function pushAttribute( out: OTLPKeyValue[], span: Span, key: string, value: unk
 
     if( !converted )
     {
-        ctx.warn( span.name, key, value );
+        ctx.warn( 'TRACE_ATTRIBUTE_INVALID', span.name, key, value );
 
         return;
     }
 
     out.push( { key, value : converted } );
+}
+
+/**
+ * Content attributes leave the process only when capture is enabled; then they are redacted and truncated
+ * here too, so spans recorded by other instrumentation cannot bypass the exporter's policy.
+ */
+function sanitizeContentAttribute( span: Span, key: string, value: SpanAttributeValue, ctx: EncodeContext ): string | undefined
+{
+    const { captureContent, redact, maxContentBytes } = ctx.options;
+
+    if( !captureContent || !redact || typeof value !== 'string' )
+    {
+        return undefined;
+    }
+
+    try
+    {
+        return truncateContent( redact( value ), maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES );
+    }
+    catch
+    {
+        ctx.warn( 'TRACE_REDACT_FAILED', span.name, key, value );
+
+        return undefined;
+    }
 }
 
 function encodeAttributes( span: Span, attributes: Record<string, SpanAttributeValue>, ctx: EncodeContext ): OTLPKeyValue[]
@@ -231,7 +261,25 @@ function encodeAttributes( span: Span, attributes: Record<string, SpanAttributeV
 
     for( const [ k, v ] of Object.entries( attributes ) )
     {
-        pushAttribute( out, span, k, v, ctx );
+        if( isSecretAttributeKey( k ) )
+        {
+            ctx.warn( 'TRACE_ATTRIBUTE_DROPPED', span.name, k, v );
+            continue;
+        }
+
+        if( CONTENT_ATTRIBUTE_KEYS.has( k ) )
+        {
+            const content = sanitizeContentAttribute( span, k, v, ctx );
+
+            if( content !== undefined )
+            {
+                out.push( { key : k, value : { stringValue : content } } );
+            }
+
+            continue;
+        }
+
+        pushAttribute( out, span, k, typeof v === 'string' ? scrubSecrets( v ) : v, ctx );
     }
 
     return out;
@@ -305,7 +353,7 @@ function encodeSpan( span: Span, ctx: EncodeContext ): OTLPSpan
         }
         else
         {
-            ctx.warn( span.name, 'spend.usd', span.spendUSD );
+            ctx.warn( 'TRACE_ATTRIBUTE_INVALID', span.name, 'spend.usd', span.spendUSD );
         }
     }
 
@@ -315,7 +363,7 @@ function encodeSpan( span: Span, ctx: EncodeContext ): OTLPSpan
 
         if( typeof v !== 'number' )
         {
-            ctx.warn( span.name, `metrics.${k}`, v );
+            ctx.warn( 'TRACE_ATTRIBUTE_INVALID', span.name, `metrics.${k}`, v );
             continue;
         }
 
@@ -341,18 +389,18 @@ function encodeSpan( span: Span, ctx: EncodeContext ): OTLPSpan
         const details = span.errorDetails;
         const errorType = details?.name ?? 'Error';
 
-        message = details?.message;
+        message = details?.message === undefined ? undefined : scrubSecrets( details.message );
         addMissing( 'error.type', { stringValue : errorType } );
 
         const exceptionAttributes: OTLPKeyValue[] = 
             [
                 { key : 'exception.type', value : { stringValue : errorType } },
-                { key : 'exception.message', value : { stringValue : details?.message ?? '' } }
+                { key : 'exception.message', value : { stringValue : scrubSecrets( details?.message ?? '' ) } }
             ];
 
         if( details?.stack )
         {
-            exceptionAttributes.push( { key : 'exception.stacktrace', value : { stringValue : details.stack.slice( 0, MAX_STACKTRACE_CHARS ) } } );
+            exceptionAttributes.push( { key : 'exception.stacktrace', value : { stringValue : scrubSecrets( details.stack.slice( 0, MAX_STACKTRACE_CHARS ) ) } } );
         }
 
         events.push( {
@@ -436,6 +484,8 @@ export function exportTracesToOTLP(
     options: OTLPExportOptions = {} 
 ): OTLPExportTraceServiceRequest
 {
+    assertCaptureConfig( options, 'exportTracesToOTLP' );
+
     const spans: OTLPSpan[] = [];
 
     for( const trace of traces )
@@ -445,12 +495,14 @@ export function exportTracesToOTLP(
                 traceId : trace.traceId,
                 options,
                 now     : trace.endTime ?? options.now?.() ?? Date.now(),
-                warn    : ( spanName, key, value ) => 
+                warn    : ( code, spanName, key, value ) => 
                 {
                     options.onWarning?.( 
                         {
-                            code    : 'TRACE_ATTRIBUTE_INVALID',
-                            message : `Dropped non-finite or unsupported attribute '${key}' on span '${spanName}'`,
+                            code,
+                            message : code === 'TRACE_ATTRIBUTE_DROPPED' ? `Dropped credential-like attribute '${key}' on span '${spanName}'`
+                                : code === 'TRACE_REDACT_FAILED' ? `Redaction failed for '${key}' on span '${spanName}'; content dropped`
+                                    : `Dropped non-finite or unsupported attribute '${key}' on span '${spanName}'`,
                             details : { traceId : trace.traceId, span : spanName, key, value : typeof value === 'number' ? String( value ) : typeof value }
                         } );
                 }

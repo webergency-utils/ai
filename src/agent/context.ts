@@ -3,6 +3,7 @@ import type { SpendTracker } from '../spend/tracker.js';
 import type { Span, SpanOptions } from '../trace/types.js';
 import { SpanImpl } from '../trace/span.js';
 import { generateTraceId } from '../trace/id.js';
+import type { ContentCaptureConfig } from '../trace/genai.js';
 
 export interface ExecutionContext
 {
@@ -10,6 +11,8 @@ export interface ExecutionContext
     readonly agentId?    : string
     readonly traceId?    : string
     readonly activeSpan? : Span
+    /** Opt-in prompt/completion capture policy, inherited from the `TraceCollector`. Absent means nothing is captured. */
+    readonly capture?    : ContentCaptureConfig
     reportSpend( entry: CategorySpendInput ): void
     startSpan( name: string, options?: SpanOptions ): Span
     withSpan<T>( 
@@ -26,6 +29,7 @@ export interface SimpleExecutionContextOptions
     agentId?    : string
     traceId?    : string
     activeSpan? : Span
+    capture?    : ContentCaptureConfig
     tracker?    : SpendTracker
     onSpend?    : ( entry: CategorySpendInput ) => void
     onSpanStart?: ( span: Span ) => void
@@ -38,6 +42,7 @@ export class SimpleExecutionContext implements ExecutionContext
     public readonly agentId?    : string;
     public readonly traceId?    : string;
     public readonly activeSpan? : Span;
+    public readonly capture?    : ContentCaptureConfig;
     readonly #tracker?          : SpendTracker;
     readonly #onSpend?          : ( entry: CategorySpendInput ) => void;
     readonly #onSpanStart?      : ( span: Span ) => void;
@@ -49,6 +54,7 @@ export class SimpleExecutionContext implements ExecutionContext
         this.agentId = options.agentId;
         this.traceId = options.traceId ?? options.activeSpan?.traceId;
         this.activeSpan = options.activeSpan;
+        this.capture = options.capture;
         this.#tracker = options.tracker;
         this.#onSpend = options.onSpend;
         this.#onSpanStart = options.onSpanStart;
@@ -158,6 +164,7 @@ export class SimpleExecutionContext implements ExecutionContext
                 agentId     : options.agentId ?? this.agentId,
                 traceId     : options.traceId ?? this.traceId,
                 activeSpan  : options.activeSpan ?? this.activeSpan,
+                capture     : options.capture ?? this.capture,
                 tracker     : options.tracker ?? this.#tracker,
                 onSpend     : options.onSpend ?? this.#onSpend,
                 onSpanStart : options.onSpanStart ?? this.#onSpanStart,

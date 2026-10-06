@@ -5,7 +5,7 @@ import type { SpendTracker } from '../spend/tracker.js';
 import type { CategorySpendBreakdown } from '../spend/types.js';
 import { AIError, BudgetRefusedError, CancelledError, CapabilityError, GuardrailTripwireError, InvalidInputError, type GuardrailStage } from '../core/error.js';
 import { finalizeStream } from '../core/tool-stream.js';
-import { applyAgentAttributes, applyModelCallAttributes, applyToolAttributes } from '../trace/genai.js';
+import { applyAgentAttributes, applyModelCallAttributes, applyToolAttributes, captureContent, GENAI_ATTR } from '../trace/genai.js';
 import type { Tool } from './tool.js';
 import type { CheckpointManager, AgentRunStatus, PendingToolCall } from './checkpoint.js';
 import type { JITToolRetriever } from './jit-retriever.js';
@@ -896,6 +896,9 @@ export class Agent
                         request  : { temperature : request.temperature, maxTokens : request.maxTokens }
                     } );
 
+                captureContent( modelSpan, stepCtx.capture, GENAI_ATTR.INPUT_MESSAGES, 
+                    request.systemPrompt ? [ { role : 'system', content : request.systemPrompt }, ...messages ] : messages );
+
                 let response: StepResponse;
 
                 if( streaming )
@@ -963,6 +966,9 @@ export class Agent
                         request  : { temperature : request.temperature, maxTokens : request.maxTokens },
                         response : { finishReason : response.finishReason, usage : response.usage }
                     } );
+
+                captureContent( modelSpan, stepCtx.capture, GENAI_ATTR.OUTPUT_MESSAGES, 
+                    [ { role : 'assistant', content : response.content, toolCalls : response.toolCalls } ], response.finishReason );
 
                 if( response.usage )
                 {
