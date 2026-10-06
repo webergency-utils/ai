@@ -3,6 +3,7 @@ import type { SpendTracker } from '../spend/tracker.js';
 import { SimpleExecutionContext, type ExecutionContext, type SimpleExecutionContextOptions } from '../agent/context.js';
 import { SpanImpl } from './span.js';
 import { computeTraceRollup } from './rollup.js';
+import { assertCaptureConfig, type ContentCaptureConfig, type ContentCaptureOptions } from './genai.js';
 import type { 
     Span, 
     SpanAttributeValue, 
@@ -18,6 +19,11 @@ export interface TraceCollectorOptions
     maxTraces?       : number
     /** Bound on in-progress traces; overflow drops the oldest active and warns (R38). */
     maxActiveTraces? : number
+    /**
+     * Opt-in prompt/completion capture for instrumentation that runs under this collector's contexts.
+     * Off by default; `captureContent: true` requires `redact` (the constructor throws without it).
+     */
+    capture?         : ContentCaptureOptions
 }
 
 export interface StartTraceOptions
@@ -35,14 +41,23 @@ export class TraceCollector extends EventEmitter
 {
     readonly #maxTraces: number;
     readonly #maxActiveTraces: number;
+    readonly #capture?: ContentCaptureConfig;
     readonly #completedTraces = new Map<string, Trace>();
     readonly #activeTraces = new Map<string, Trace>();
 
     constructor( options: TraceCollectorOptions = {} )
     {
         super();
+        assertCaptureConfig( options.capture, 'TraceCollector' );
+        this.#capture = options.capture ? Object.freeze( { ...options.capture } ) : undefined;
         this.#maxTraces = options.maxTraces ?? 1000;
         this.#maxActiveTraces = options.maxActiveTraces ?? options.maxTraces ?? 1000;
+    }
+
+    /** The capture policy contexts created by this collector carry, if any. */
+    public get capture(): ContentCaptureConfig | undefined
+    {
+        return this.#capture;
     }
 
     public override on<E extends keyof TraceEvents>( event: E, listener: TraceEvents[E] ): this
@@ -113,6 +128,7 @@ export class TraceCollector extends EventEmitter
         return new SimpleExecutionContext( 
             {
                 ...options,
+                capture     : options.capture ?? this.#capture,
                 onSpanStart : ( span ) => 
                 {
                     this.recordSpanStart( span );
@@ -160,6 +176,7 @@ export class TraceCollector extends EventEmitter
                 agentId     : options.agentId,
                 traceId     : trace.traceId,
                 activeSpan  : rootSpan,
+                capture     : this.#capture,
                 tracker     : options.tracker,
                 onSpanStart : ( span ) => 
                 {

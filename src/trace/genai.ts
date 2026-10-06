@@ -1,3 +1,4 @@
+import { AIError } from '../core/error.js';
 import type { Span, SpanAttributeValue } from './types.js';
 
 /**
@@ -276,4 +277,161 @@ export function toGenAISpanName( span: Span, extra: Record<string, SpanAttribute
         default:
             return span.name;
     }
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Privacy: opt-in content capture, redaction, truncation and secret scrubbing
+ * ---------------------------------------------------------------------------------------------- */
+
+export const CONTENT_ATTRIBUTE_KEYS: ReadonlySet<string> = new Set( [ GENAI_ATTR.INPUT_MESSAGES, GENAI_ATTR.OUTPUT_MESSAGES ] );
+
+export const DEFAULT_MAX_CONTENT_BYTES = 16 * 1024;
+export const TRUNCATION_MARKER = '...truncated';
+
+/** Opt-in capture of prompts and completions. Off by default; `redact` is mandatory when on. */
+export interface ContentCaptureOptions
+{
+    captureContent? : boolean
+    /** Applied to every captured text before truncation. Required when `captureContent` is true. */
+    redact?         : ( content: string ) => string
+    /** UTF-8 byte cap per captured attribute. Default 16 KiB. */
+    maxContentBytes?: number
+}
+
+export type ContentCaptureConfig = Readonly<ContentCaptureOptions>;
+
+/** Fails loudly when capture is enabled without a redactor (never capture unredacted content by accident). */
+export function assertCaptureConfig( options: ContentCaptureOptions | undefined, owner: string ): void
+{
+    if( options?.captureContent && typeof options.redact !== 'function' )
+    {
+        throw new AIError( `${owner}: captureContent requires a \`redact( content ) => content\` function`, 'TRACE_CAPTURE_CONFIG' );
+    }
+
+    if( options?.maxContentBytes !== undefined && ( !Number.isFinite( options.maxContentBytes ) || options.maxContentBytes <= 0 ) )
+    {
+        throw new AIError( `${owner}: maxContentBytes must be a positive finite number`, 'TRACE_CAPTURE_CONFIG' );
+    }
+}
+
+/** Truncates to `maxBytes` UTF-8 bytes (never splitting a character) and appends the marker. */
+export function truncateContent( text: string, maxBytes: number ): string
+{
+    const bytes = Buffer.from( text, 'utf8' );
+
+    if( bytes.length <= maxBytes )
+    {
+        return text;
+    }
+
+    let cut = Math.floor( maxBytes );
+
+    // Step back over UTF-8 continuation bytes so a multi-byte character is not split.
+    while( cut > 0 && ( bytes[cut]! & 0xC0 ) === 0x80 )
+    {
+        cut--;
+    }
+
+    return bytes.subarray( 0, cut ).toString( 'utf8' ) + TRUNCATION_MARKER;
+}
+
+export interface GenAIMessage
+{
+    role  : string
+    parts : Array<Record<string, unknown>>
+    finish_reason? : string
+}
+
+export interface CapturableMessage
+{
+    role        : string
+    content     : string
+    toolCallId? : string
+    toolCalls?  : Array<{ id: string, name: string, arguments: unknown }>
+}
+
+/** Converts chat messages to the semconv `gen_ai.*.messages` JSON shape, redacting every text. */
+export function toGenAIMessages( messages: CapturableMessage[], redact: ( content: string ) => string, finishReason?: string ): GenAIMessage[]
+{
+    return messages.map( ( message ) => 
+    {
+        const parts: Array<Record<string, unknown>> = [];
+
+        if( message.role === 'tool' )
+        {
+            parts.push( { type : 'tool_call_response', id : message.toolCallId, response : redact( message.content ) } );
+        }
+        else if( message.content )
+        {
+            parts.push( { type : 'text', content : redact( message.content ) } );
+        }
+
+        for( const call of message.toolCalls ?? [] )
+        {
+            parts.push( { type : 'tool_call', id : call.id, name : call.name, arguments : redact( JSON.stringify( call.arguments ) ) } );
+        }
+
+        return { role : message.role, parts, ...( finishReason ? { finish_reason : finishReason } : {} ) };
+    } );
+}
+
+/**
+ * Sets a content attribute (`gen_ai.input.messages` / `gen_ai.output.messages`) when capture is enabled.
+ * Returns whether anything was captured. A throwing redactor fails closed: nothing is captured.
+ */
+export function captureContent( 
+    span: Span, 
+    config: ContentCaptureConfig | undefined, 
+    key: typeof GENAI_ATTR.INPUT_MESSAGES | typeof GENAI_ATTR.OUTPUT_MESSAGES, 
+    messages: CapturableMessage[], 
+    finishReason?: string 
+): boolean
+{
+    if( !config?.captureContent || typeof config.redact !== 'function' )
+    {
+        return false;
+    }
+
+    try
+    {
+        const json = JSON.stringify( toGenAIMessages( messages, config.redact, finishReason ) );
+
+        span.setAttribute( key, truncateContent( json, config.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES ) );
+
+        return true;
+    }
+    catch
+    {
+        return false;
+    }
+}
+
+/** Attribute keys that look like credentials. They are never exported, whoever set them. */
+const SECRET_KEY_RE = /(^|[._-])(api[._-]?key|authorization|auth[._-]?token|access[._-]?token|secret|password|passwd|bearer|cookie|credentials?|raw[._-]?options)([._-]|$)/i;
+
+export function isSecretAttributeKey( key: string ): boolean
+{
+    return SECRET_KEY_RE.test( key );
+}
+
+const SECRET_VALUE_RES: RegExp[] = 
+    [
+        /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
+        /\bBasic\s+[A-Za-z0-9+/=]{8,}/g,
+        /\bsk-[A-Za-z0-9_-]{16,}/g,
+        /\bAIza[0-9A-Za-z_-]{20,}/g,
+        /\b(?:xox[abprs]|ghp|gho|ghu|ghs)[-_][A-Za-z0-9-]{10,}/g
+    ];
+
+/** Replaces well-known credential shapes (bearer tokens, `sk-` / Google / Slack / GitHub keys) in free text. */
+export function scrubSecrets( text: string ): string
+{
+    let out = text;
+
+    for( const re of SECRET_VALUE_RES )
+    {
+        out = out.replace( re, '[REDACTED]' );
+    }
+
+    return out;
 }
