@@ -3,6 +3,7 @@ import type {
     Span, 
     SpanAttributeValue, 
     SpanErrorDetails, 
+    SpanEvent, 
     SpanKind, 
     SpanMetrics, 
     SpanOptions, 
@@ -32,6 +33,7 @@ export class SpanImpl implements Span
     public status                 : SpanStatus;
     public errorDetails?          : SpanErrorDetails;
     public readonly attributes    : Record<string, SpanAttributeValue>;
+    public readonly events        : SpanEvent[];
     public readonly metrics       : SpanMetrics;
     public spendUSD               : number;
     public readonly categorySpend : CategorySpendBreakdown;
@@ -48,6 +50,7 @@ export class SpanImpl implements Span
         this.startTime = options.startTime ?? Date.now();
         this.status = options.status ?? 'ok';
         this.attributes = { ...( options.attributes ?? {} ) };
+        this.events = [];
         this.metrics = { ...( options.metrics ?? {} ) };
         this.spendUSD = 0;
         this.categorySpend = 
@@ -71,6 +74,16 @@ export class SpanImpl implements Span
     public setAttributes( attributes: Record<string, SpanAttributeValue> ): void
     {
         Object.assign( this.attributes, attributes );
+    }
+
+    public addEvent( name: string, attributes?: Record<string, SpanAttributeValue>, time?: number ): void
+    {
+        this.events.push( 
+            {
+                name,
+                time : time ?? Date.now(),
+                ...( attributes ? { attributes : { ...attributes } } : {} )
+            } );
     }
 
     public recordMetric( key: string, value: number ): void
@@ -142,6 +155,7 @@ export class SpanImpl implements Span
             status        : this.status,
             errorDetails  : this.errorDetails,
             attributes    : { ...this.attributes },
+            ...( this.events.length > 0 ? { events : this.events.map( ( e ) => {return { ...e };} ) } : {} ),
             metrics       : { ...this.metrics },
             spendUSD      : this.spendUSD,
             categorySpend : { ...this.categorySpend },
@@ -167,6 +181,12 @@ export class SpanImpl implements Span
         span.endTime = data.endTime;
         span.durationMs = data.durationMs;
         span.errorDetails = data.errorDetails;
+
+        if( Array.isArray( data.events ) )
+        {
+            span.events.push( ...data.events.map( ( e ) => {return { ...e };} ) );
+        }
+
         span.spendUSD = data.spendUSD;
         Object.assign( span.categorySpend, data.categorySpend );
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { SpanImpl } from '../../src/trace/span.js';
-import { exportTraceToJSON, exportTraceToOTLP } from '../../src/trace/exporter.js';
+import { exportTraceToJSON, exportTraceToOTLP, exportTracesToOTLP } from '../../src/trace/exporter.js';
 import { computeTraceRollup } from '../../src/trace/rollup.js';
 import type { Trace } from '../../src/trace/types.js';
 
@@ -136,5 +136,148 @@ describe( 'Trace Exporters (U6)', () =>
 
         const promptTokenAttr = modelOtlp.attributes.find( ( a ) => {return a.key === 'tokens.prompt';} );
         expect( promptTokenAttr?.value.intValue ).toBe( '120' );
+    } );
+} );
+
+describe( 'Trace Exporters encoding correctness (R11, R12)', () => 
+{
+    function traceOf( root: SpanImpl, endTime?: number ): Trace
+    {
+        const trace: Trace = 
+        {
+            traceId       : root.traceId,
+            startTime     : root.startTime,
+            endTime,
+            durationMs    : endTime === undefined ? undefined : endTime - root.startTime,
+            rootSpan      : root,
+            totalSpendUSD : 0,
+            categorySpend : { model : 0, storage : 0, compute : 0, network : 0, mcp : 0, tools : 0, custom : 0 }
+        };
+
+        computeTraceRollup( trace );
+
+        return trace;
+    }
+
+    function attr( span: { attributes: Array<{ key: string, value: Record<string, unknown> }> }, key: string )
+    {
+        return span.attributes.find( ( a ) => {return a.key === key;} )?.value;
+    }
+
+    it( 'AE7: exports an open child span as unfinished error, never a zero-length success', () => 
+    {
+        const root = new SpanImpl( 'agent:run', { kind : 'agent', startTime : 1_000 } );
+        const open = new SpanImpl( 'tool:slow', { kind : 'tool', startTime : 1_100 } );
+
+        root.addChild( open );
+        root.end( 1_500 );
+
+        const otlp = exportTraceToOTLP( traceOf( root, 1_500 ) );
+        const spans = otlp.resourceSpans[0]!.scopeSpans[0]!.spans;
+        const openOtlp = spans[1]!;
+
+        expect( attr( openOtlp, 'trace.span.unfinished' ) ).toEqual( { boolValue : true } );
+        expect( openOtlp.status.code ).toBe( 2 );
+        expect( openOtlp.status.message ).toBe( 'unfinished' );
+        expect( BigInt( openOtlp.endTimeUnixNano ) ).toBeGreaterThan( BigInt( openOtlp.startTimeUnixNano ) );
+        expect( spans[0]!.attributes.find( ( a ) => {return a.key === 'trace.span.unfinished';} ) ).toBeUndefined();
+    } );
+
+    it( 'never ends a span before it starts', () => 
+    {
+        const root = new SpanImpl( 'x', { startTime : 5_000 } );
+
+        root.end( 4_000 );
+
+        const [ span ] = exportTraceToOTLP( traceOf( root, 4_000 ) ).resourceSpans[0]!.scopeSpans[0]!.spans;
+
+        expect( BigInt( span!.endTimeUnixNano ) ).toBeGreaterThanOrEqual( BigInt( span!.startTimeUnixNano ) );
+    } );
+
+    it( 'drops non-finite numbers with a TRACE_ATTRIBUTE_INVALID warning and stays valid JSON', () => 
+    {
+        const root = new SpanImpl( 'x', { startTime : 1 } );
+
+        root.setAttribute( 'bad.nan', Number.NaN );
+        root.setAttribute( 'bad.inf', Number.POSITIVE_INFINITY );
+        root.setAttribute( 'good', 1.5 );
+        root.metrics.weird = Number.NEGATIVE_INFINITY;
+        root.end( 2 );
+
+        const warnings: string[] = [];
+        const otlp = exportTraceToOTLP( traceOf( root, 2 ), { onWarning : ( w ) => {warnings.push( `${w.code}:${( w.details as { key: string } ).key}` );} } );
+        const json = JSON.stringify( otlp );
+        const span = otlp.resourceSpans[0]!.scopeSpans[0]!.spans[0]!;
+
+        expect( json ).not.toContain( 'null' );
+        expect( attr( span, 'bad.nan' ) ).toBeUndefined();
+        expect( attr( span, 'metrics.weird' ) ).toBeUndefined();
+        expect( attr( span, 'good' ) ).toEqual( { doubleValue : 1.5 } );
+        expect( warnings.sort() ).toEqual( [ 'TRACE_ATTRIBUTE_INVALID:bad.inf', 'TRACE_ATTRIBUTE_INVALID:bad.nan', 'TRACE_ATTRIBUTE_INVALID:metrics.weird' ] );
+    } );
+
+    it( 'adds error.type and an exception event with truncated stacktrace on error spans', () => 
+    {
+        const root = new SpanImpl( 'x', { startTime : 1 } );
+
+        root.status = 'error';
+        root.errorDetails = { message : 'boom', name : 'TypeError', stack : 's'.repeat( 10_000 ) };
+        root.end( 3 );
+
+        const span = exportTraceToOTLP( traceOf( root, 3 ) ).resourceSpans[0]!.scopeSpans[0]!.spans[0]!;
+        const event = span.events![0]!;
+
+        expect( attr( span, 'error.type' ) ).toEqual( { stringValue : 'TypeError' } );
+        expect( span.status ).toEqual( { code : 2, message : 'boom' } );
+        expect( event.name ).toBe( 'exception' );
+        expect( event.attributes.find( ( a ) => {return a.key === 'exception.type';} )?.value ).toEqual( { stringValue : 'TypeError' } );
+        expect( event.attributes.find( ( a ) => {return a.key === 'exception.message';} )?.value ).toEqual( { stringValue : 'boom' } );
+        expect( event.attributes.find( ( a ) => {return a.key === 'exception.stacktrace';} )?.value.stringValue ).toHaveLength( 4096 );
+    } );
+
+    it( 'omits parentSpanId for roots and carries recorded span events, flags, and resource attributes', () => 
+    {
+        const root = new SpanImpl( 'x', { startTime : 1 } );
+        const child = new SpanImpl( 'y', { startTime : 1 } );
+
+        root.addChild( child );
+        child.addEvent( 'retry', { attempt : 2 }, 2 );
+        child.end( 2 );
+        root.end( 3 );
+
+        const otlp = exportTraceToOTLP( traceOf( root, 3 ), { resourceAttributes : { 'deployment.environment' : 'test', 'service.name' : 'ignored' }, serviceName : 'svc' } );
+        const [ r, c ] = otlp.resourceSpans[0]!.scopeSpans[0]!.spans;
+
+        expect( 'parentSpanId' in r! ).toBe( false );
+        expect( c!.parentSpanId ).toBe( r!.spanId );
+        expect( c!.events![0]!.name ).toBe( 'retry' );
+        expect( r!.flags ).toBe( 0x101 );
+        expect( otlp.resourceSpans[0]!.resource.attributes.map( ( a ) => {return a.key;} ) ).toEqual( [ 'service.name', 'service.version', 'deployment.environment' ] );
+        expect( otlp.resourceSpans[0]!.resource.attributes[0]!.value ).toEqual( { stringValue : 'svc' } );
+    } );
+
+    it( 'merges many traces under one resource with exportTracesToOTLP', () => 
+    {
+        const a = new SpanImpl( 'a', { startTime : 1 } );
+        const b = new SpanImpl( 'b', { startTime : 1 } );
+
+        a.end( 2 );
+        b.end( 2 );
+
+        const otlp = exportTracesToOTLP( [ traceOf( a, 2 ), traceOf( b, 2 ) ] );
+
+        expect( otlp.resourceSpans ).toHaveLength( 1 );
+        expect( otlp.resourceSpans[0]!.scopeSpans[0]!.spans.map( ( s ) => {return s.traceId;} ) ).toEqual( [ a.traceId, b.traceId ] );
+    } );
+
+    it( 'serializes span events through toJSON/fromSerialized', () => 
+    {
+        const s = new SpanImpl( 'x', { startTime : 1 } );
+
+        s.addEvent( 'e', { k : 'v' }, 5 );
+
+        const copy = SpanImpl.fromSerialized( s.toJSON() );
+
+        expect( copy.events ).toEqual( [ { name : 'e', time : 5, attributes : { k : 'v' } } ] );
     } );
 } );

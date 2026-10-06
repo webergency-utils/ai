@@ -17,7 +17,16 @@ export interface SpanErrorDetails
     stack?  : string
 }
 
-export type SpanAttributeValue = string | number | boolean;
+/** Scalar attribute, or a homogeneous string array (e.g. `gen_ai.response.finish_reasons`). */
+export type SpanAttributeValue = string | number | boolean | string[];
+
+export interface SpanEvent
+{
+    name        : string
+    /** Epoch milliseconds. */
+    time        : number
+    attributes? : Record<string, SpanAttributeValue>
+}
 
 export interface SpanMetrics
 {
@@ -62,6 +71,7 @@ export interface SerializedSpan
     status         : SpanStatus
     errorDetails?  : SpanErrorDetails
     attributes     : Record<string, SpanAttributeValue>
+    events?        : SpanEvent[]
     metrics        : SpanMetrics
     spendUSD       : number
     categorySpend  : CategorySpendBreakdown
@@ -82,6 +92,7 @@ export interface Span
     status                 : SpanStatus
     errorDetails?          : SpanErrorDetails
     readonly attributes    : Record<string, SpanAttributeValue>
+    readonly events?       : SpanEvent[]
     readonly metrics       : SpanMetrics
     spendUSD               : number
     readonly categorySpend : CategorySpendBreakdown
@@ -90,6 +101,7 @@ export interface Span
 
     setAttribute( key: string, value: SpanAttributeValue ): void
     setAttributes( attributes: Record<string, SpanAttributeValue> ): void
+    addEvent?( name: string, attributes?: Record<string, SpanAttributeValue>, time?: number ): void
     recordMetric( key: string, value: number ): void
     addMetrics( metrics: Partial<SpanMetrics> ): void
     recordSpend( entry: CategorySpendInput ): void
